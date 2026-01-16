@@ -1,0 +1,27 @@
+---
+name: "RAR Archive Reader"
+guid: "a8f38b91-6c7d-4e9a-9f2b-1234567890ab"
+version: "1.0.0.0"
+targetAbi: "10.9.0.0"
+framework: "net8.0"
+owner: "community"
+overview: "Play media files directly from RAR archives using rar2fs"
+description: >
+  ALPHA SOFTWARE - USE AT YOUR OWN RISK. Data loss is possible.
+  This plugin enables playback of media files stored inside RAR archives without
+  manual extraction. Uses rar2fs for transparent FUSE mounting on Linux. The
+  SharpCompress fallback for Windows is completely untested. Only tested with
+  linuxserver/jellyfin Docker container.
+category: "General"
+artifacts:
+  - "Jellyfin.Plugin.RarArchiveReader.dll"
+  - "SharpCompress.dll"
+changelog: >
+  ## 1.0.0
+  - Initial release
+  - rar2fs mounting for transparent RAR access
+  - Auto-discovery of library paths from Jellyfin config
+  - Multi-part archive support (.rar, .r00, .part1.rar)
+  - Automatic library scan trigger after mounting
+  - Fallback in-memory streaming via SharpCompress
+  - Configuration UI for settings

@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>RAR Archive Reader</title>
+</head>
+<body>
+    <div id="RarArchiveReaderConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox">
+        <div data-role="content">
+            <div class="content-primary">
+                <form id="RarArchiveReaderConfigForm">
+                    <div class="sectionTitleContainer flex align-items-center">
+                        <h2 class="sectionTitle">RAR Archive Reader Configuration</h2>
+                    </div>
+
+                    <div class="verticalSection">
+                        <p>Configure how RAR archives are processed and displayed in Jellyfin.</p>
+                    </div>
+
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label>
+                            <input id="autoScanEnabled" type="checkbox" is="emby-checkbox" />
+                            <span>Enable automatic scanning for RAR archives</span>
+                        </label>
+                        <div class="fieldDescription">
+                            Automatically detect and process RAR archives during library scans.
+                        </div>
+                    </div>
+
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label>
+                            <input id="preferRar2fs" type="checkbox" is="emby-checkbox" />
+                            <span>Prefer rar2fs for mounting (Linux/macOS only)</span>
+                        </label>
+                        <div class="fieldDescription">
+                            Use rar2fs utility for filesystem mounting when available. Falls back to in-memory streaming if not installed or on Windows.
+                        </div>
+                    </div>
+
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="mountPointBase">Mount point base directory</label>
+                        <input id="mountPointBase" type="text" is="emby-input" />
+                        <div class="fieldDescription">
+                            Base directory for rar2fs mount points. Leave empty for default (/tmp/jellyfin-rar-mounts on Linux/macOS).
+                        </div>
+                    </div>
+
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="mountIdleTimeoutMinutes">Mount idle timeout (minutes)</label>
+                        <input id="mountIdleTimeoutMinutes" type="number" is="emby-input" min="5" max="1440" />
+                        <div class="fieldDescription">
+                            Automatically unmount archives after this many minutes of inactivity (5-1440 minutes).
+                        </div>
+                    </div>
+
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="maxFileSizeMB">Maximum file size (MB) - Fallback mode only</label>
+                        <input id="maxFileSizeMB" type="number" is="emby-input" min="1" max="10000" />
+                        <div class="fieldDescription">
+                            Maximum size of individual files to read from archives in fallback mode (in-memory streaming).
+                        </div>
+                    </div>
+
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label>
+                            <input id="cacheMetadata" type="checkbox" is="emby-checkbox" />
+                            <span>Cache archive metadata</span>
+                        </label>
+                        <div class="fieldDescription">
+                            Cache the list of files in archives for faster subsequent access.
+                        </div>
+                    </div>
+
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="supportedVideoExtensions">Supported video extensions</label>
+                        <input id="supportedVideoExtensions" type="text" is="emby-input" />
+                        <div class="fieldDescription">
+                            Comma-separated list of video file extensions to recognize (e.g., .mkv,.mp4,.avi).
+                        </div>
+                    </div>
+
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="supportedAudioExtensions">Supported audio extensions</label>
+                        <input id="supportedAudioExtensions" type="text" is="emby-input" />
+                        <div class="fieldDescription">
+                            Comma-separated list of audio file extensions to recognize (e.g., .mp3,.flac,.wav).
+                        </div>
+                    </div>
+
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="supportedImageExtensions">Supported image extensions</label>
+                        <input id="supportedImageExtensions" type="text" is="emby-input" />
+                        <div class="fieldDescription">
+                            Comma-separated list of image file extensions to recognize (e.g., .jpg,.png,.gif).
+                        </div>
+                    </div>
+
+                    <div>
+                        <button is="emby-button" type="submit" class="raised button-submit block">
+                            <span>Save</span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <script type="text/javascript">
+            var RarArchiveReaderConfig = {
+                pluginUniqueId: 'a8f38b91-6c7d-4e9a-9f2b-1234567890ab'
+            };
+
+            document.querySelector('#RarArchiveReaderConfigPage')
+                .addEventListener('pageshow', function () {
+                    Dashboard.showLoadingMsg();
+
+                    ApiClient.getPluginConfiguration(RarArchiveReaderConfig.pluginUniqueId).then(function (config) {
+                        document.querySelector('#autoScanEnabled').checked = config.AutoScanEnabled;
+                        document.querySelector('#preferRar2fs').checked = config.PreferRar2fs;
+                        document.querySelector('#mountPointBase').value = config.MountPointBase || '';
+                        document.querySelector('#mountIdleTimeoutMinutes').value = config.MountIdleTimeoutMinutes;
+                        document.querySelector('#maxFileSizeMB').value = config.MaxFileSizeMB;
+                        document.querySelector('#cacheMetadata').checked = config.CacheMetadata;
+                        document.querySelector('#supportedVideoExtensions').value = config.SupportedVideoExtensions;
+                        document.querySelector('#supportedAudioExtensions').value = config.SupportedAudioExtensions;
+                        document.querySelector('#supportedImageExtensions').value = config.SupportedImageExtensions;
+
+                        Dashboard.hideLoadingMsg();
+                    });
+                });
+
+            document.querySelector('#RarArchiveReaderConfigForm').addEventListener('submit', function (e) {
+                e.preventDefault();
+                Dashboard.showLoadingMsg();
+
+                ApiClient.getPluginConfiguration(RarArchiveReaderConfig.pluginUniqueId).then(function (config) {
+                    config.AutoScanEnabled = document.querySelector('#autoScanEnabled').checked;
+                    config.PreferRar2fs = document.querySelector('#preferRar2fs').checked;
+                    config.MountPointBase = document.querySelector('#mountPointBase').value;
+                    config.MountIdleTimeoutMinutes = parseInt(document.querySelector('#mountIdleTimeoutMinutes').value);
+                    config.MaxFileSizeMB = parseInt(document.querySelector('#maxFileSizeMB').value);
+                    config.CacheMetadata = document.querySelector('#cacheMetadata').checked;
+                    config.SupportedVideoExtensions = document.querySelector('#supportedVideoExtensions').value;
+                    config.SupportedAudioExtensions = document.querySelector('#supportedAudioExtensions').value;
+                    config.SupportedImageExtensions = document.querySelector('#supportedImageExtensions').value;
+
+                    ApiClient.updatePluginConfiguration(RarArchiveReaderConfig.pluginUniqueId, config).then(function () {
+                        Dashboard.processPluginConfigurationUpdateResult();
+                    });
+                });
+
+                return false;
+            });
+        </script>
+    </div>
+</body>
+</html>

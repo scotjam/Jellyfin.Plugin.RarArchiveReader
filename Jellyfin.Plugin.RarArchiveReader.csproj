@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Jellyfin.Controller" Version="10.9.11" />
+    <PackageReference Include="Jellyfin.Model" Version="10.9.11" />
+    <PackageReference Include="SharpCompress" Version="0.44.0" />
+  </ItemGroup>
+
+  <!-- Note: Uses rar2fs utility for filesystem mounting (install separately) -->
+  <!-- Fallback to in-memory streaming if rar2fs is not available -->
+
+  <ItemGroup>
+    <None Include="build.yaml" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Configuration\configPage.html">
+      <LogicalName>Jellyfin.Plugin.RarArchiveReader.Configuration.configPage.html</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
+</Project>
