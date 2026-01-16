@@ -28,20 +28,38 @@ A Jellyfin plugin that enables playback of media files stored inside RAR archive
 
 ## Installation
 
-### Quick Install (Recommended)
+### Step 1: Clone the repository on your Docker host
 
-Run the installer script on your Docker host:
+SSH into your Docker host and clone the repo:
 
 ```bash
-./install.sh /path/to/jellyfin/config
+ssh root@your-server-ip
+cd /tmp
+git clone https://github.com/scotjam/Jellyfin.Plugin.RarArchiveReader.git
+cd Jellyfin.Plugin.RarArchiveReader
+```
+
+### Step 2: Run the installer
+
+Run the installer script, providing the path to your Jellyfin config directory:
+
+```bash
+bash install.sh /path/to/jellyfin/config
+```
+
+To find your Jellyfin config path:
+```bash
+docker inspect jellyfin --format '{{range .Mounts}}{{if eq .Destination "/config"}}{{.Source}}{{end}}{{end}}'
 ```
 
 The installer will:
-- Copy plugin files to the plugins directory
+- Copy plugin DLLs to the plugins directory
 - Copy the rar2fs setup script to custom-cont-init.d
 - Set correct permissions
 
-Then add FUSE privileges to your `docker-compose.yml`:
+### Step 3: Configure Docker with FUSE privileges
+
+Your Jellyfin container needs FUSE access. Add these settings to your `docker-compose.yml`:
 
 ```yaml
 services:
@@ -58,45 +76,97 @@ services:
       - /path/to/jellyfin/config/custom-cont-init.d:/custom-cont-init.d:ro
 ```
 
-Finally, restart Jellyfin:
+**Important:** The `custom-cont-init.d` volume mount is required for the rar2fs install script to run on container startup.
+
+If you're using Portainer or OpenMediaVault, you may need to recreate the container with these settings. Example docker run command:
+
+```bash
+docker run -d \
+  --name jellyfin \
+  --restart unless-stopped \
+  -e PUID=1000 \
+  -e PGID=100 \
+  -e TZ=Your/Timezone \
+  --device /dev/dri:/dev/dri \
+  --device /dev/fuse:/dev/fuse \
+  --cap-add SYS_ADMIN \
+  --security-opt apparmor:unconfined \
+  -p 8096:8096 \
+  -v /path/to/config:/config \
+  -v /path/to/cache:/cache \
+  -v /path/to/media:/media \
+  -v /path/to/config/custom-cont-init.d:/custom-cont-init.d:ro \
+  lscr.io/linuxserver/jellyfin:latest
+```
+
+### Step 4: Restart Jellyfin
 
 ```bash
 docker-compose down && docker-compose up -d
+# or if using docker run:
+docker restart jellyfin
 ```
 
-**First startup** takes ~3-5 minutes to build rar2fs. Subsequent startups are fast (~10 seconds).
+**First startup** takes ~3-5 minutes to build rar2fs from source. Subsequent startups are fast (~10 seconds).
 
-### Manual Installation
+### Step 5: Verify installation
+
+Check the container logs to confirm rar2fs installed successfully:
+
+```bash
+docker logs jellyfin 2>&1 | grep -i rar2fs
+```
+
+You should see:
+```
+[rar2fs] Installation complete: rar2fs v1.29.7 ...
+```
+
+### Manual Installation (Alternative)
 
 <details>
 <summary>Click to expand manual steps</summary>
 
-1. Create directories:
+If you prefer not to use the installer script, you can manually copy files:
+
+1. SSH into your Docker host:
+```bash
+ssh root@your-server-ip
+```
+
+2. Clone the repository:
+```bash
+cd /tmp
+git clone https://github.com/scotjam/Jellyfin.Plugin.RarArchiveReader.git
+cd Jellyfin.Plugin.RarArchiveReader
+```
+
+3. Create directories:
 ```bash
 mkdir -p /path/to/jellyfin/config/data/plugins/RarArchiveReader
 mkdir -p /path/to/jellyfin/config/custom-cont-init.d
 ```
 
-2. Copy plugin files:
+4. Copy plugin files:
 ```bash
 cp Jellyfin.Plugin.RarArchiveReader.dll /path/to/jellyfin/config/data/plugins/RarArchiveReader/
 cp SharpCompress.dll /path/to/jellyfin/config/data/plugins/RarArchiveReader/
 ```
 
-3. Copy rar2fs setup script:
+5. Copy rar2fs setup script:
 ```bash
 cp scripts/install-rar2fs.sh /path/to/jellyfin/config/custom-cont-init.d/
 chmod +x /path/to/jellyfin/config/custom-cont-init.d/install-rar2fs.sh
 ```
 
-4. Set permissions:
+6. Set permissions:
 ```bash
 chown -R 1000:100 /path/to/jellyfin/config/data/plugins/RarArchiveReader
 ```
 
-5. Update docker-compose.yml with FUSE privileges (see above)
+7. Configure Docker with FUSE privileges (see Step 3 above)
 
-6. Restart Jellyfin
+8. Restart Jellyfin (see Step 4 above)
 
 </details>
 
