@@ -67,16 +67,20 @@ services:
     image: lscr.io/linuxserver/jellyfin:latest
     # ... your existing config ...
     devices:
-      - /dev/fuse:/dev/fuse
+      - /dev/dri:/dev/dri    # You likely already have this line
+      - /dev/fuse:/dev/fuse  # ADD this line for FUSE support
     cap_add:
       - SYS_ADMIN
     security_opt:
       - apparmor:unconfined
     volumes:
-      - /path/to/jellyfin/config/custom-cont-init.d:/custom-cont-init.d:ro
+      # ... your existing volumes ...
+      - /path/to/jellyfin/config/custom-cont-init.d:/custom-cont-init.d:ro  # ADD this line
 ```
 
-**Important:** The `custom-cont-init.d` volume mount is required for the rar2fs install script to run on container startup.
+**Important:**
+- Add `/dev/fuse` to your existing `devices` section (don't remove `/dev/dri` if you have it)
+- The `custom-cont-init.d` volume mount is required for the rar2fs install script to run on container startup
 
 If you're using Portainer or OpenMediaVault, you may need to recreate the container with these settings. Example docker run command:
 
