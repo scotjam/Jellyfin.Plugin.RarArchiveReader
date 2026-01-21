@@ -260,16 +260,9 @@ namespace Jellyfin.Plugin.RarArchiveReader
                     return null;
                 }
 
-                // For streaming, we need to copy to a memory stream
-                // because SharpCompress entry streams can't always seek
-                var memoryStream = new MemoryStream();
-                using (var entryStream = entry.OpenEntryStream())
-                {
-                    entryStream.CopyTo(memoryStream);
-                }
-
-                memoryStream.Position = 0;
-                return memoryStream;
+                // Return the entry stream directly for memory-efficient streaming
+                // Note: This stream may not support seeking, but avoids loading entire file into memory
+                return entry.OpenEntryStream();
             }
             catch (Exception ex)
             {

@@ -4,11 +4,13 @@ A Jellyfin plugin that enables playback of media files stored inside RAR archive
 
 > **⚠️ ALPHA SOFTWARE - USE AT YOUR OWN RISK**
 >
-> This plugin is in early development and has only been tested in a single environment (linuxserver/jellyfin Docker container on OpenMediaVault). It may not work in your setup, could cause issues with your Jellyfin installation, or behave unexpectedly.
+> This plugin is in early development. It may not work in your setup, could cause issues with your Jellyfin installation, or behave unexpectedly.
 >
-> **Data loss is possible.** This plugin mounts filesystems and modifies directory structures. Back up your media libraries and Jellyfin configuration before installing.
+> **Tested environments:**
+> - Linux: linuxserver/jellyfin Docker container on OpenMediaVault (rar2fs mode)
+> - Windows: Jellyfin 10.x with STRM streaming mode
 >
-> **The SharpCompress fallback mode (used on Windows or when rar2fs is unavailable) is completely untested.** Only the rar2fs mounting approach on Linux has been verified to work.
+> **Data loss is possible.** On Linux, this plugin mounts filesystems and modifies directory structures. Back up your media libraries and Jellyfin configuration before installing.
 >
 > No warranty is provided. You assume all responsibility for any damage or data loss.
 
@@ -22,11 +24,75 @@ A Jellyfin plugin that enables playback of media files stored inside RAR archive
 
 ## Requirements
 
+### Linux (Docker)
 - **Jellyfin**: Running in Docker (tested with linuxserver/jellyfin)
 - **Docker privileges**: FUSE support requires additional container privileges
 - **Linux host**: rar2fs only works on Linux
 
+### Windows
+- **Jellyfin**: Windows installation (standard or portable)
+- **No additional dependencies**: Uses built-in .strm file streaming
+
 ## Installation
+
+### Windows Installation
+
+On Windows, the plugin uses `.strm` files to stream media directly from RAR archives (rar2fs is not available on Windows).
+
+#### Step 1: Download the plugin files
+
+Download or build these files:
+- `Jellyfin.Plugin.RarArchiveReader.dll`
+- `SharpCompress.dll`
+
+#### Step 2: Create the plugin folder
+
+Create a folder for the plugin:
+```
+C:\ProgramData\Jellyfin\Server\plugins\RarArchiveReader\
+```
+
+#### Step 3: Copy the files
+
+Copy both DLL files to the plugin folder:
+```
+C:\ProgramData\Jellyfin\Server\plugins\RarArchiveReader\Jellyfin.Plugin.RarArchiveReader.dll
+C:\ProgramData\Jellyfin\Server\plugins\RarArchiveReader\SharpCompress.dll
+```
+
+#### Step 4: Restart Jellyfin
+
+Stop and start Jellyfin for the plugin to load.
+
+#### Step 5: Organize your media
+
+**Important:** Jellyfin uses folder names to identify TV shows. Your RAR files must be in a folder named after the show:
+
+```
+D:\TV Shows\
+└── Show Name (Year)\           ← Folder name must match the show
+    ├── showname.s01e01.rar     ← RAR archive (can be multi-part)
+    ├── showname.s01e01.r00
+    ├── showname.s01e01.r01
+    └── ...
+```
+
+For example:
+```
+D:\TV Shows\SuperKitties (2022)\superkitties.s02e01.dutch.1080p.web.h264-nlkids.rar
+```
+
+#### Step 6: Scan your library
+
+1. Go to Jellyfin Dashboard → Libraries
+2. Click on your TV Shows library → Scan Library
+
+The plugin will:
+1. Find all RAR archives in your library
+2. Extract the list of media files inside each archive
+3. Create `.strm` files that point to the streaming endpoint
+
+### Linux Installation (Docker)
 
 ### Step 1: Clone the repository on your Docker host
 
@@ -181,6 +247,41 @@ After startup, the plugin will:
 
 ## How It Works
 
+### Windows (STRM Streaming Mode)
+
+On Windows, the plugin uses `.strm` files to enable playback from RAR archives:
+
+1. **On library scan**, the plugin:
+   - Finds all `.rar` files in your library paths
+   - Opens each archive and lists the media files inside
+   - Creates `.strm` files in the same folder as the RAR
+
+2. **STRM file contents:**
+   ```
+   http://localhost:8096/RarStream/{encoded-archive-path}/{encoded-entry-path}
+   ```
+
+3. **On playback**, Jellyfin:
+   - Reads the `.strm` file to get the streaming URL
+   - Requests the media from the plugin's `/RarStream` endpoint
+   - The plugin extracts and streams the file directly from the RAR
+
+4. **Result:**
+   ```
+   D:\TV Shows\SuperKitties (2022)\
+   ├── superkitties.s02e01.rar         ← Original RAR archive
+   ├── superkitties.s02e01.r00         ← Additional RAR parts
+   ├── superkitties.s02e01.r01
+   └── SuperKitties.S02E01.strm        ← Created by plugin (points to streaming URL)
+   ```
+
+5. **Auto-update feature:**
+   - If you move RAR files to a different folder, just rescan the library
+   - The plugin automatically updates `.strm` files with the new paths
+   - Orphaned `.strm` files (pointing to deleted RARs) are cleaned up
+
+### Linux (Docker with rar2fs)
+
 1. **On container startup**, the install script:
    - Builds and installs rar2fs (first time only, ~3-5 min)
    - Configures FUSE for non-root users (every restart)
@@ -214,7 +315,36 @@ Navigate to **Dashboard** → **Plugins** → **RAR Archive Reader**:
 
 ## Troubleshooting
 
-### First startup is slow
+### Windows: Show appears as "Programme" with 0 episodes
+
+This happens when Jellyfin can't identify the show from the folder name.
+
+**Fix:** Rename the folder to match the actual show name:
+```
+D:\kitties\              ← BAD: "kitties" not recognized
+D:\SuperKitties (2022)\  ← GOOD: matches show in TVDB/TMDB
+```
+
+After renaming, rescan the library.
+
+### Windows: Playback loads forever then fails
+
+1. **Check the `.strm` file path:** Open the `.strm` file in a text editor. The URL should point to the current location of your RAR file.
+
+2. **Verify the endpoint works:** Open the URL from the `.strm` file in your browser. You should get a file download.
+
+3. **Rescan the library:** If you moved the RAR files, rescan the library to update the `.strm` files automatically.
+
+### Windows: No `.strm` files created
+
+1. Check that the RAR archive contains supported video files (`.mkv`, `.mp4`, etc.)
+2. Verify the plugin is enabled in Dashboard → Plugins
+3. Check Jellyfin logs for errors:
+   ```
+   C:\ProgramData\Jellyfin\Server\log\
+   ```
+
+### Linux: First startup is slow
 
 The first startup takes ~3-5 minutes to build rar2fs from source. Subsequent startups are fast.
 
@@ -261,9 +391,15 @@ For users who prefer container-level setup (mounts created before Jellyfin start
 
 ## Limitations
 
+### Windows
+- **Folder naming matters**: The parent folder of RAR files must match the show name for Jellyfin to identify it
+- **Hardcoded port**: `.strm` files use `localhost:8096` - if Jellyfin runs on a different port, playback won't work
+- **Seeking may be slow**: Seeking in large files requires re-reading from the archive start
+- **No encrypted archives**: Password-protected RARs not supported
+
+### Linux (Docker)
 - **FUSE mounts are container-only**: Not visible via Samba/NFS from host
 - **Mounts don't persist**: Re-mounted automatically on container restart
-- **Linux only**: rar2fs requires Linux; Windows uses fallback streaming
 - **No encrypted archives**: Password-protected RARs not supported
 
 ## Building from Source
@@ -330,6 +466,13 @@ SOFTWARE.
 **Note:** This plugin optionally uses [rar2fs](https://github.com/hasse69/rar2fs), which is licensed under GPL v3. rar2fs is called as an external process and is not distributed with this plugin.
 
 ## Changelog
+
+### 1.1.0
+
+- **Windows support tested and documented**
+- Auto-update `.strm` files when RAR archives are moved
+- Automatic cleanup of orphaned `.strm` files
+- Improved documentation for Windows installation
 
 ### 1.0.0
 

@@ -4,6 +4,8 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Web;
+using System.Xml.Linq;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.IO;
 using Microsoft.Extensions.Logging;
@@ -129,7 +131,14 @@ namespace Jellyfin.Plugin.RarArchiveReader
                         }
                         else
                         {
-                            _logger.LogDebug("rar2fs not available or not preferred, archive will use fallback mode: {Archive}", rarFile);
+                            // Fallback: Create .strm files for direct streaming without extraction
+                            _logger.LogInformation("rar2fs not available, creating .strm files for streaming: {Archive}", rarFile);
+                            var strmCount = CreateStrmFiles(rarFile, entries, config);
+                            if (strmCount > 0)
+                            {
+                                _logger.LogInformation("Created {Count} .strm files for {Archive}", strmCount, rarFile);
+                                mountedCount += strmCount;
+                            }
                         }
                     }
                     catch (Exception ex)
@@ -143,6 +152,9 @@ namespace Jellyfin.Plugin.RarArchiveReader
 
                 _logger.LogInformation("RAR archive post-scan complete. Processed {Processed}/{Total} archives, mounted {Mounted}",
                     processedCount, rarFiles.Count, mountedCount);
+
+                // Clean up orphaned .strm files (pointing to non-existent RAR archives)
+                CleanupOrphanedStrmFiles(libraryPaths);
 
                 progress.Report(100);
                 await Task.CompletedTask;
@@ -161,27 +173,68 @@ namespace Jellyfin.Plugin.RarArchiveReader
 
         private List<string> GetLibraryPaths()
         {
-            var paths = new List<string>();
+            var paths = new HashSet<string>();
 
-            // Common Jellyfin mount points - adjust based on your setup
-            var potentialPaths = new[]
+            // Read from Jellyfin's library configuration files
+            var configBasePaths = new[]
             {
-                "/tv",
-                "/kidstv",
-                "/movies",
-                "/kidsmovies",
-                "/media"
+                "/config/data/root/default",  // linuxserver container
+                "/var/lib/jellyfin/root/default",  // native Linux install
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "jellyfin", "root", "default"),  // Windows (portable)
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Jellyfin", "Server", "root", "default"),  // Windows (standard install)
             };
 
-            foreach (var path in potentialPaths)
+            foreach (var configBasePath in configBasePaths)
             {
-                if (Directory.Exists(path))
+                if (!Directory.Exists(configBasePath))
                 {
-                    paths.Add(path);
+                    continue;
+                }
+
+                _logger.LogDebug("Searching for library config in: {Path}", configBasePath);
+
+                try
+                {
+                    // Find all options.xml files in library subdirectories
+                    var optionsFiles = Directory.EnumerateFiles(configBasePath, "options.xml", SearchOption.AllDirectories);
+
+                    foreach (var optionsFile in optionsFiles)
+                    {
+                        try
+                        {
+                            var xml = XDocument.Load(optionsFile);
+
+                            // Look for Path elements inside PathInfos/MediaPathInfo
+                            var pathElements = xml.Descendants("Path");
+
+                            foreach (var pathElement in pathElements)
+                            {
+                                var path = pathElement.Value?.Trim();
+                                if (!string.IsNullOrEmpty(path) && Directory.Exists(path))
+                                {
+                                    paths.Add(path);
+                                    _logger.LogDebug("Found library path: {Path}", path);
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogDebug(ex, "Error reading options file: {File}", optionsFile);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Error scanning config path: {Path}", configBasePath);
                 }
             }
 
-            return paths;
+            if (paths.Count == 0)
+            {
+                _logger.LogWarning("No library paths found in any Jellyfin configuration location");
+            }
+
+            return paths.ToList();
         }
 
         private bool IsMediaFile(string filename, Configuration.PluginConfiguration config)
@@ -206,6 +259,148 @@ namespace Jellyfin.Plugin.RarArchiveReader
             }
 
             return allExtensions.Any(ext => ext.Trim().Equals(extension, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// Creates or updates .strm files for media entries in a RAR archive.
+        /// These files allow Jellyfin to see the media and stream directly from the archive.
+        /// Updates existing .strm files if the RAR archive path has changed.
+        /// </summary>
+        /// <param name="rarFile">Path to the RAR archive.</param>
+        /// <param name="entries">List of entries in the archive.</param>
+        /// <param name="config">Plugin configuration.</param>
+        /// <returns>Number of .strm files created or updated.</returns>
+        private int CreateStrmFiles(string rarFile, List<ArchiveEntryInfo> entries, Configuration.PluginConfiguration config)
+        {
+            int createdCount = 0;
+            var archiveDir = Path.GetDirectoryName(rarFile);
+
+            if (string.IsNullOrEmpty(archiveDir))
+            {
+                return 0;
+            }
+
+            foreach (var entry in entries)
+            {
+                if (!IsMediaFile(entry.Key, config))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    // Get the media filename from the entry
+                    var mediaFileName = Path.GetFileName(entry.Key);
+                    var strmFileName = Path.ChangeExtension(mediaFileName, ".strm");
+
+                    // Put .strm file in the same directory as the RAR file
+                    // This ensures Jellyfin uses the correct folder name for the show
+                    string strmPath = Path.Combine(archiveDir, strmFileName);
+
+                    // Create the expected streaming URL
+                    // Format: http://localhost:8096/RarStream/{encodedArchivePath}/{encodedEntryPath}
+                    var encodedArchivePath = HttpUtility.UrlEncode(rarFile);
+                    var encodedEntryPath = HttpUtility.UrlEncode(entry.Key);
+                    var streamUrl = $"http://localhost:8096/RarStream/{encodedArchivePath}/{encodedEntryPath}";
+
+                    // Check if .strm file already exists
+                    if (File.Exists(strmPath))
+                    {
+                        // Read existing content and check if it needs updating
+                        var existingContent = File.ReadAllText(strmPath).Trim();
+                        if (existingContent == streamUrl)
+                        {
+                            _logger.LogDebug("STRM file already up to date: {Path}", strmPath);
+                            createdCount++;
+                            continue;
+                        }
+
+                        // URL has changed (RAR file moved), update the .strm file
+                        _logger.LogInformation("Updating STRM file with new RAR path: {Path}", strmPath);
+                        File.WriteAllText(strmPath, streamUrl);
+                        _logger.LogDebug("Updated STRM file: {Path} -> {Url}", strmPath, streamUrl);
+                        createdCount++;
+                        continue;
+                    }
+
+                    // Write the new .strm file
+                    File.WriteAllText(strmPath, streamUrl);
+                    _logger.LogDebug("Created STRM file: {Path} -> {Url}", strmPath, streamUrl);
+                    createdCount++;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to create/update .strm file for entry: {Entry}", entry.Key);
+                }
+            }
+
+            return createdCount;
+        }
+
+        /// <summary>
+        /// Cleans up orphaned .strm files that point to non-existent RAR archives.
+        /// </summary>
+        /// <param name="libraryPaths">List of library paths to scan.</param>
+        private void CleanupOrphanedStrmFiles(List<string> libraryPaths)
+        {
+            int removedCount = 0;
+
+            foreach (var libraryPath in libraryPaths)
+            {
+                try
+                {
+                    var strmFiles = Directory.EnumerateFiles(libraryPath, "*.strm", SearchOption.AllDirectories);
+
+                    foreach (var strmFile in strmFiles)
+                    {
+                        try
+                        {
+                            var content = File.ReadAllText(strmFile).Trim();
+
+                            // Check if this is a RarStream .strm file
+                            if (!content.Contains("/RarStream/"))
+                            {
+                                continue;
+                            }
+
+                            // Extract the RAR archive path from the URL
+                            // Format: http://localhost:8096/RarStream/{encodedArchivePath}/{encodedEntryPath}
+                            var match = System.Text.RegularExpressions.Regex.Match(
+                                content,
+                                @"/RarStream/([^/]+)/");
+
+                            if (!match.Success)
+                            {
+                                continue;
+                            }
+
+                            var encodedPath = match.Groups[1].Value;
+                            var rarPath = HttpUtility.UrlDecode(encodedPath);
+
+                            // Check if the RAR archive still exists
+                            if (!File.Exists(rarPath))
+                            {
+                                _logger.LogInformation("Removing orphaned STRM file (RAR not found): {StrmFile}", strmFile);
+                                File.Delete(strmFile);
+                                removedCount++;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogDebug(ex, "Error checking STRM file: {File}", strmFile);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Error scanning for orphaned STRM files in: {Path}", libraryPath);
+                }
+            }
+
+            if (removedCount > 0)
+            {
+                _logger.LogInformation("Removed {Count} orphaned STRM files", removedCount);
+            }
         }
     }
 }

@@ -33,6 +33,12 @@ namespace Jellyfin.Plugin.RarArchiveReader.Configuration
         public int MaxFileSizeMB { get; set; } = 500;
 
         /// <summary>
+        /// Gets or sets the streaming buffer size in MB for RAR archive playback.
+        /// Larger values use more memory but provide better seeking performance.
+        /// </summary>
+        public int StreamingBufferSizeMB { get; set; } = 264;
+
+        /// <summary>
         /// Gets or sets a value indicating whether to cache archive metadata.
         /// </summary>
         public bool CacheMetadata { get; set; } = true;

@@ -259,7 +259,8 @@ namespace Jellyfin.Plugin.RarArchiveReader
             {
                 "/config/data/root/default",  // linuxserver container
                 "/var/lib/jellyfin/root/default",  // native Linux install
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "jellyfin", "root", "default")  // Windows
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "jellyfin", "root", "default"),  // Windows (portable)
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Jellyfin", "Server", "root", "default"),  // Windows (standard install)
             };
 
             foreach (var configBasePath in configBasePaths)
@@ -302,18 +303,9 @@ namespace Jellyfin.Plugin.RarArchiveReader
                 }
             }
 
-            // Fallback to common mount points if no config found
             if (paths.Count == 0)
             {
-                _logger.LogDebug("No library paths found in config, checking common mount points");
-                var fallbackPaths = new[] { "/tv", "/movies", "/media", "/kidstv", "/kidsmovies" };
-                foreach (var path in fallbackPaths)
-                {
-                    if (Directory.Exists(path))
-                    {
-                        paths.Add(path);
-                    }
-                }
+                _logger.LogWarning("No library paths found in any Jellyfin configuration location");
             }
 
             return paths.ToList();
