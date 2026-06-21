@@ -450,7 +450,7 @@ namespace Jellyfin.Plugin.RarArchiveReader
                 return;
             }
 
-            List<MediaBrowser.Controller.Entities.BaseItem> items;
+            IReadOnlyList<MediaBrowser.Controller.Entities.BaseItem> items;
             try
             {
                 items = _libraryManager.GetItemList(new MediaBrowser.Controller.Entities.InternalItemsQuery
