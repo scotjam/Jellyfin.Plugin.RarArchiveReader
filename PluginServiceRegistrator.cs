@@ -12,7 +12,6 @@ namespace Jellyfin.Plugin.RarArchiveReader
         /// <inheritdoc />
         public void RegisterServices(IServiceCollection serviceCollection, IServerApplicationHost applicationHost)
         {
-            serviceCollection.AddHostedService<RarMountHostedService>();
         }
     }
 }

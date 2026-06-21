@@ -27,32 +27,6 @@
                         </div>
                     </div>
 
-                    <div class="checkboxContainer checkboxContainer-withDescription">
-                        <label>
-                            <input id="preferRar2fs" type="checkbox" is="emby-checkbox" />
-                            <span>Prefer rar2fs for mounting (Linux/macOS only)</span>
-                        </label>
-                        <div class="fieldDescription">
-                            Use rar2fs utility for filesystem mounting when available. Falls back to in-memory streaming if not installed or on Windows.
-                        </div>
-                    </div>
-
-                    <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="mountPointBase">Mount point base directory</label>
-                        <input id="mountPointBase" type="text" is="emby-input" />
-                        <div class="fieldDescription">
-                            Base directory for rar2fs mount points. Leave empty for default (/tmp/jellyfin-rar-mounts on Linux/macOS).
-                        </div>
-                    </div>
-
-                    <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="mountIdleTimeoutMinutes">Mount idle timeout (minutes)</label>
-                        <input id="mountIdleTimeoutMinutes" type="number" is="emby-input" min="5" max="1440" />
-                        <div class="fieldDescription">
-                            Automatically unmount archives after this many minutes of inactivity (5-1440 minutes).
-                        </div>
-                    </div>
-
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="maxFileSizeMB">Maximum file size (MB) - Fallback mode only</label>
                         <input id="maxFileSizeMB" type="number" is="emby-input" min="1" max="10000" />
@@ -115,9 +89,6 @@
 
                     ApiClient.getPluginConfiguration(RarArchiveReaderConfig.pluginUniqueId).then(function (config) {
                         document.querySelector('#autoScanEnabled').checked = config.AutoScanEnabled;
-                        document.querySelector('#preferRar2fs').checked = config.PreferRar2fs;
-                        document.querySelector('#mountPointBase').value = config.MountPointBase || '';
-                        document.querySelector('#mountIdleTimeoutMinutes').value = config.MountIdleTimeoutMinutes;
                         document.querySelector('#maxFileSizeMB').value = config.MaxFileSizeMB;
                         document.querySelector('#cacheMetadata').checked = config.CacheMetadata;
                         document.querySelector('#supportedVideoExtensions').value = config.SupportedVideoExtensions;
@@ -134,9 +105,6 @@
 
                 ApiClient.getPluginConfiguration(RarArchiveReaderConfig.pluginUniqueId).then(function (config) {
                     config.AutoScanEnabled = document.querySelector('#autoScanEnabled').checked;
-                    config.PreferRar2fs = document.querySelector('#preferRar2fs').checked;
-                    config.MountPointBase = document.querySelector('#mountPointBase').value;
-                    config.MountIdleTimeoutMinutes = parseInt(document.querySelector('#mountIdleTimeoutMinutes').value);
                     config.MaxFileSizeMB = parseInt(document.querySelector('#maxFileSizeMB').value);
                     config.CacheMetadata = document.querySelector('#cacheMetadata').checked;
                     config.SupportedVideoExtensions = document.querySelector('#supportedVideoExtensions').value;

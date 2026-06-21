@@ -13,21 +13,6 @@ namespace Jellyfin.Plugin.RarArchiveReader.Configuration
         public bool AutoScanEnabled { get; set; } = true;
 
         /// <summary>
-        /// Gets or sets a value indicating whether to prefer rar2fs over in-memory streaming.
-        /// </summary>
-        public bool PreferRar2fs { get; set; } = true;
-
-        /// <summary>
-        /// Gets or sets the base directory for rar2fs mount points.
-        /// </summary>
-        public string MountPointBase { get; set; } = string.Empty;
-
-        /// <summary>
-        /// Gets or sets the maximum idle time (in minutes) before unmounting archives.
-        /// </summary>
-        public int MountIdleTimeoutMinutes { get; set; } = 30;
-
-        /// <summary>
         /// Gets or sets the maximum file size (in MB) to read from archives (fallback mode only).
         /// </summary>
         public int MaxFileSizeMB { get; set; } = 500;

@@ -17,7 +17,6 @@ namespace Jellyfin.Plugin.RarArchiveReader
     {
         private static readonly object _lock = new object();
         private static RarFileSystem? _fileSystem;
-        private static Rar2fsManager? _mountManager;
         private static ILoggerFactory? _loggerFactory;
 
         /// <summary>
@@ -69,27 +68,6 @@ namespace Jellyfin.Plugin.RarArchiveReader
                 }
             }
             return _fileSystem;
-        }
-
-        /// <summary>
-        /// Gets the rar2fs mount manager instance.
-        /// </summary>
-        public static Rar2fsManager GetMountManager()
-        {
-            if (_mountManager == null)
-            {
-                lock (_lock)
-                {
-                    if (_mountManager == null)
-                    {
-                        var logger = _loggerFactory?.CreateLogger<Rar2fsManager>()
-                            ?? new NullLogger<Rar2fsManager>();
-                        var fileSystem = GetFileSystem();
-                        _mountManager = new Rar2fsManager(logger, fileSystem);
-                    }
-                }
-            }
-            return _mountManager;
         }
 
         /// <inheritdoc />

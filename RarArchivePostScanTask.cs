@@ -18,14 +18,17 @@ namespace Jellyfin.Plugin.RarArchiveReader
     public class RarArchivePostScanTask : ILibraryPostScanTask
     {
         private readonly ILogger<RarArchivePostScanTask> _logger;
+        private readonly ILibraryManager _libraryManager;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="RarArchivePostScanTask"/> class.
         /// </summary>
         /// <param name="logger">The logger.</param>
-        public RarArchivePostScanTask(ILogger<RarArchivePostScanTask> logger)
+        /// <param name="libraryManager">The library manager, used to prune stale database items.</param>
+        public RarArchivePostScanTask(ILogger<RarArchivePostScanTask> logger, ILibraryManager libraryManager)
         {
             _logger = logger;
+            _libraryManager = libraryManager;
         }
 
         /// <inheritdoc />
@@ -43,7 +46,6 @@ namespace Jellyfin.Plugin.RarArchiveReader
                 _logger.LogInformation("Starting RAR archive post-scan task");
 
                 var fileSystem = Plugin.GetFileSystem();
-                var mountManager = Plugin.GetMountManager();
 
                 // Get all library paths from Jellyfin configuration
                 var libraryPaths = GetLibraryPaths();
@@ -57,6 +59,7 @@ namespace Jellyfin.Plugin.RarArchiveReader
                 _logger.LogInformation("Scanning {Count} library paths for RAR archives", libraryPaths.Count);
 
                 var rarFiles = new List<string>();
+                var deniedPaths = new List<string>();
                 int currentPath = 0;
 
                 foreach (var path in libraryPaths)
@@ -67,12 +70,13 @@ namespace Jellyfin.Plugin.RarArchiveReader
 
                     try
                     {
-                        var filesInPath = Directory.EnumerateFiles(path, "*.rar", SearchOption.AllDirectories)
-                            .Where(f => RarFileSystem.IsRarArchive(f))
-                            .ToList();
-
+                        var filesInPath = RarFileSystem.FindRarFiles(path, deniedPaths, cancellationToken);
                         rarFiles.AddRange(filesInPath);
                         _logger.LogDebug("Found {Count} RAR files in {Path}", filesInPath.Count, path);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
                     }
                     catch (Exception ex)
                     {
@@ -82,6 +86,8 @@ namespace Jellyfin.Plugin.RarArchiveReader
                     currentPath++;
                     progress.Report((double)currentPath / libraryPaths.Count * 50); // First 50% is scanning
                 }
+
+                RarFileSystem.LogDeniedPaths(_logger, deniedPaths);
 
                 _logger.LogInformation("Found {Count} RAR archives to process", rarFiles.Count);
 
@@ -94,6 +100,10 @@ namespace Jellyfin.Plugin.RarArchiveReader
                 int processedCount = 0;
                 int mountedCount = 0;
 
+                // Media file names (e.g. "movie.mkv") found inside the RAR archives this run.
+                // Used to safely identify stale DB rows that are leftovers of RAR content.
+                var rarMediaFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
                 foreach (var rarFile in rarFiles)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -104,41 +114,32 @@ namespace Jellyfin.Plugin.RarArchiveReader
 
                         // Check if this archive contains media files
                         var entries = fileSystem.GetArchiveEntries(rarFile);
-                        var hasMedia = entries.Any(e => IsMediaFile(e.Key, config));
+                        var mediaEntries = entries.Where(e => IsMediaFile(e.Key, config)).ToList();
 
-                        if (!hasMedia)
+                        if (mediaEntries.Count == 0)
                         {
                             _logger.LogDebug("Archive {Archive} contains no media files, skipping", rarFile);
                             processedCount++;
                             continue;
                         }
 
-                        _logger.LogInformation("Archive {Archive} contains {Count} media files", rarFile, entries.Count(e => IsMediaFile(e.Key, config)));
-
-                        // Try to mount with rar2fs if configured
-                        if (config.PreferRar2fs && mountManager.IsRar2fsAvailable)
+                        foreach (var mediaEntry in mediaEntries)
                         {
-                            var mountPoint = mountManager.MountArchive(rarFile);
-                            if (mountPoint != null)
+                            var name = Path.GetFileName(mediaEntry.Key);
+                            if (!string.IsNullOrEmpty(name))
                             {
-                                _logger.LogInformation("Successfully mounted {Archive} at {MountPoint}", rarFile, mountPoint);
-                                mountedCount++;
-                            }
-                            else
-                            {
-                                _logger.LogWarning("Failed to mount {Archive} with rar2fs", rarFile);
+                                rarMediaFileNames.Add(name);
                             }
                         }
-                        else
+
+                        _logger.LogInformation("Archive {Archive} contains {Count} media files", rarFile, mediaEntries.Count);
+
+                        // Create .strm files for direct streaming without extraction
+                        var strmCount = CreateStrmFiles(rarFile, entries, config);
+                        if (strmCount > 0)
                         {
-                            // Fallback: Create .strm files for direct streaming without extraction
-                            _logger.LogInformation("rar2fs not available, creating .strm files for streaming: {Archive}", rarFile);
-                            var strmCount = CreateStrmFiles(rarFile, entries, config);
-                            if (strmCount > 0)
-                            {
-                                _logger.LogInformation("Created {Count} .strm files for {Archive}", strmCount, rarFile);
-                                mountedCount += strmCount;
-                            }
+                            _logger.LogInformation("Created {Count} .strm files for {Archive}", strmCount, rarFile);
+                            mountedCount += strmCount;
                         }
                     }
                     catch (Exception ex)
@@ -155,6 +156,10 @@ namespace Jellyfin.Plugin.RarArchiveReader
 
                 // Clean up orphaned .strm files (pointing to non-existent RAR archives)
                 CleanupOrphanedStrmFiles(libraryPaths);
+
+                // Clean up stale DB rows whose backing file no longer exists (e.g. left over
+                // from an older plugin version that registered extracted/mounted media paths).
+                CleanupStaleDbItems(libraryPaths, rarMediaFileNames);
 
                 progress.Report(100);
                 await Task.CompletedTask;
@@ -400,6 +405,125 @@ namespace Jellyfin.Plugin.RarArchiveReader
             if (removedCount > 0)
             {
                 _logger.LogInformation("Removed {Count} orphaned STRM files", removedCount);
+            }
+        }
+
+        /// <summary>
+        /// Removes stale Jellyfin database items whose backing file no longer exists on disk.
+        /// </summary>
+        /// <remarks>
+        /// Jellyfin only prunes a library item when the folder that should contain it is
+        /// actually scanned. Items left behind by an older version of this plugin (which
+        /// registered extracted/mounted media paths such as
+        /// <c>/library/show/show.mkv</c> that were later replaced by the RAR set + a
+        /// <c>.strm</c>) live in a phantom folder that is never visited again, so they
+        /// linger forever — visible in the UI but failing playback with "Could not find file".
+        /// <para>
+        /// To stay safe this only deletes an item when ALL of the following hold:
+        /// its file (and folder) is genuinely missing; its file name matches a media file
+        /// found inside a RAR archive this run (so it is provably RAR-related, not an
+        /// unrelated library file); and it sits under a configured library root that is
+        /// currently online. The last two guards prevent mass-deletion during a temporary
+        /// mount/disk outage.
+        /// </para>
+        /// </remarks>
+        /// <param name="libraryPaths">Configured library roots that were scanned for RAR archives.</param>
+        /// <param name="rarMediaFileNames">Media file names discovered inside RAR archives this run.</param>
+        private void CleanupStaleDbItems(List<string> libraryPaths, HashSet<string> rarMediaFileNames)
+        {
+            // Nothing to match against -> do nothing (also avoids acting on an empty/failed scan).
+            if (rarMediaFileNames.Count == 0)
+            {
+                return;
+            }
+
+            // Only consider library roots that are currently online, so we never prune
+            // items just because a mount happens to be unavailable during this scan.
+            var onlineRoots = libraryPaths
+                .Where(p => !string.IsNullOrEmpty(p) && Directory.Exists(p))
+                .Select(p => p.TrimEnd('/', '\\') + Path.DirectorySeparatorChar)
+                .ToList();
+
+            if (onlineRoots.Count == 0)
+            {
+                _logger.LogDebug("Skipping stale DB cleanup: no configured library roots are currently online");
+                return;
+            }
+
+            List<MediaBrowser.Controller.Entities.BaseItem> items;
+            try
+            {
+                items = _libraryManager.GetItemList(new MediaBrowser.Controller.Entities.InternalItemsQuery
+                {
+                    IncludeItemTypes = new[]
+                    {
+                        Jellyfin.Data.Enums.BaseItemKind.Movie,
+                        Jellyfin.Data.Enums.BaseItemKind.Episode,
+                        Jellyfin.Data.Enums.BaseItemKind.Video,
+                    },
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Stale DB cleanup: failed to query library items");
+                return;
+            }
+
+            int removedCount = 0;
+
+            foreach (var item in items)
+            {
+                try
+                {
+                    var path = item.Path;
+                    if (string.IsNullOrEmpty(path))
+                    {
+                        continue;
+                    }
+
+                    // The backing media is still present -> not stale, leave it alone.
+                    if (File.Exists(path) || Directory.Exists(path))
+                    {
+                        continue;
+                    }
+
+                    // Only touch items whose file name matches media we found inside a RAR
+                    // this run. This is what makes the deletion provably RAR-related.
+                    var fileName = Path.GetFileName(path);
+                    if (string.IsNullOrEmpty(fileName) || !rarMediaFileNames.Contains(fileName))
+                    {
+                        continue;
+                    }
+
+                    // The phantom path must sit under an online library root.
+                    var normalized = path.Replace('\\', '/');
+                    var underOnlineRoot = onlineRoots.Any(root =>
+                        normalized.StartsWith(root.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase));
+                    if (!underOnlineRoot)
+                    {
+                        continue;
+                    }
+
+                    _logger.LogInformation(
+                        "Removing stale DB item (file missing, matches RAR content): \"{Name}\" -> {Path}",
+                        item.Name,
+                        path);
+
+                    _libraryManager.DeleteItem(
+                        item,
+                        new MediaBrowser.Controller.Library.DeleteOptions { DeleteFileLocation = false },
+                        notifyParentItem: true);
+                    removedCount++;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Stale DB cleanup: failed to remove item {Path}", item.Path);
+                }
+            }
+
+            if (removedCount > 0)
+            {
+                _logger.LogInformation("Removed {Count} stale DB item(s) with missing files", removedCount);
             }
         }
     }

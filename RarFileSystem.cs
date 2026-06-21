@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security;
+using System.Threading;
 using MediaBrowser.Model.IO;
 using Microsoft.Extensions.Logging;
 
@@ -14,6 +16,7 @@ namespace Jellyfin.Plugin.RarArchiveReader
     {
         private readonly ILogger _logger;
         private readonly Dictionary<string, RarArchiveReader> _openArchives;
+        private readonly Dictionary<string, (int Count, long TotalLength, long MaxTicks)> _cacheStamps;
         private readonly object _lock = new object();
         private bool _disposed;
 
@@ -25,6 +28,62 @@ namespace Jellyfin.Plugin.RarArchiveReader
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _openArchives = new Dictionary<string, RarArchiveReader>();
+            _cacheStamps = new Dictionary<string, (int, long, long)>();
+        }
+
+        /// <summary>
+        /// Computes a change-detection stamp over every RAR volume in the archive's
+        /// directory (count, total bytes, newest write time). A per-release folder
+        /// holds exactly one volume set, so any add/remove/rewrite of a part — including
+        /// the later <c>.r00..rNN</c> parts that hardlink shuffles touch while the first
+        /// <c>.rar</c> volume keeps its old mtime — changes the stamp and forces a reopen.
+        /// </summary>
+        /// <param name="archivePath">Path to any volume of the archive (the first volume is passed in practice).</param>
+        /// <returns>A tuple uniquely identifying the current on-disk state of the volume set.</returns>
+        private static (int Count, long TotalLength, long MaxTicks) ComputeVolumeStamp(string archivePath)
+        {
+            var dir = Path.GetDirectoryName(archivePath);
+            if (string.IsNullOrEmpty(dir))
+            {
+                return (0, 0, 0);
+            }
+
+            int count = 0;
+            long total = 0;
+            long maxTicks = 0;
+
+            try
+            {
+                foreach (var file in Directory.EnumerateFiles(dir))
+                {
+                    var ext = Path.GetExtension(file).ToLowerInvariant();
+                    var isVolume = ext == ".rar"
+                        || ext == ".cbr"
+                        || System.Text.RegularExpressions.Regex.IsMatch(ext, @"^\.r\d{2,3}$");
+
+                    if (!isVolume)
+                    {
+                        continue;
+                    }
+
+                    var info = new FileInfo(file);
+                    count++;
+                    total += info.Length;
+                    var ticks = info.LastWriteTimeUtc.Ticks;
+                    if (ticks > maxTicks)
+                    {
+                        maxTicks = ticks;
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // If the directory can't be enumerated, fall back to a zero stamp so the
+                // caller treats the cache as stale and reopens (fail-safe, never fail-stale).
+                return (0, 0, 0);
+            }
+
+            return (count, total, maxTicks);
         }
 
         /// <summary>
@@ -41,6 +100,106 @@ namespace Jellyfin.Plugin.RarArchiveReader
 
             var extension = Path.GetExtension(path).ToLowerInvariant();
             return extension == ".rar" || extension == ".cbr";
+        }
+
+        /// <summary>
+        /// Recursively finds RAR files under a root path, skipping UNRAR mount point
+        /// directories to avoid traversing slow FUSE mounts.
+        /// </summary>
+        /// <param name="rootPath">The root directory to scan.</param>
+        /// <param name="deniedPaths">Collects paths where access was denied.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <returns>List of RAR file paths found.</returns>
+        public static List<string> FindRarFiles(string rootPath, List<string> deniedPaths, CancellationToken cancellationToken)
+        {
+            var results = new List<string>();
+            var stack = new Stack<string>();
+            stack.Push(rootPath);
+
+            while (stack.Count > 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var dir = stack.Pop();
+
+                // Enumerate files in this directory
+                try
+                {
+                    foreach (var file in Directory.EnumerateFiles(dir, "*.rar"))
+                    {
+                        if (IsRarArchive(file))
+                        {
+                            results.Add(file);
+                        }
+                    }
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    deniedPaths.Add(dir);
+                    continue;
+                }
+                catch (SecurityException)
+                {
+                    deniedPaths.Add(dir);
+                    continue;
+                }
+                catch (DirectoryNotFoundException)
+                {
+                    continue;
+                }
+
+                // Enumerate subdirectories, skipping UNRAR mount points
+                try
+                {
+                    foreach (var subDir in Directory.EnumerateDirectories(dir))
+                    {
+                        if (string.Equals(Path.GetFileName(subDir), "UNRAR", StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+
+                        stack.Push(subDir);
+                    }
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    deniedPaths.Add(dir);
+                }
+                catch (SecurityException)
+                {
+                    deniedPaths.Add(dir);
+                }
+                catch (DirectoryNotFoundException)
+                {
+                    // Directory was removed between enumeration and access
+                }
+            }
+
+            return results;
+        }
+
+        /// <summary>
+        /// Logs a warning with a copy-pasteable shell command to fix permission-denied paths.
+        /// </summary>
+        /// <param name="logger">The logger instance.</param>
+        /// <param name="deniedPaths">List of paths that were inaccessible.</param>
+        public static void LogDeniedPaths(ILogger logger, List<string> deniedPaths)
+        {
+            if (deniedPaths.Count == 0)
+            {
+                return;
+            }
+
+            var uniquePaths = deniedPaths.Distinct().ToList();
+            var pathList = string.Join("\n  ", uniquePaths);
+            var chownCommands = string.Join("\n", uniquePaths.Select(p => $"  chown -R 1000:100 \"{p}\""));
+
+            logger.LogWarning(
+                "Permission denied for {Count} path(s). The Jellyfin user cannot access these directories:\n  {Paths}\n\n" +
+                "To fix, run the following commands in your Docker host shell:\n{Commands}\n\n" +
+                "Or if running Jellyfin natively, replace 1000:100 with your Jellyfin user/group.",
+                uniquePaths.Count,
+                pathList,
+                chownCommands);
         }
 
         /// <summary>
@@ -98,17 +257,33 @@ namespace Jellyfin.Plugin.RarArchiveReader
                 return null;
             }
 
+            var stamp = ComputeVolumeStamp(archivePath);
+
             lock (_lock)
             {
                 if (_openArchives.TryGetValue(archivePath, out var existingReader))
                 {
-                    return existingReader;
+                    // Reuse the cached reader only if the volume set is byte-for-byte the
+                    // same as when it was opened. Without this check a reader cached during
+                    // an incomplete or since-replaced state stays broken for the whole
+                    // Jellyfin process lifetime (the cause of archives silently reporting
+                    // "no media" after a hardlink/re-download under a long-running server).
+                    if (_cacheStamps.TryGetValue(archivePath, out var cachedStamp) && cachedStamp == stamp)
+                    {
+                        return existingReader;
+                    }
+
+                    _logger.LogInformation("RAR volume set changed on disk, reopening archive: {Path}", archivePath);
+                    existingReader.Dispose();
+                    _openArchives.Remove(archivePath);
+                    _cacheStamps.Remove(archivePath);
                 }
 
                 var reader = new RarArchiveReader(archivePath, _logger);
                 if (reader.Open())
                 {
                     _openArchives[archivePath] = reader;
+                    _cacheStamps[archivePath] = stamp;
                     return reader;
                 }
 
@@ -197,6 +372,7 @@ namespace Jellyfin.Plugin.RarArchiveReader
                 {
                     reader.Dispose();
                     _openArchives.Remove(archivePath);
+                    _cacheStamps.Remove(archivePath);
                 }
             }
         }
@@ -213,6 +389,7 @@ namespace Jellyfin.Plugin.RarArchiveReader
                     reader.Dispose();
                 }
                 _openArchives.Clear();
+                _cacheStamps.Clear();
             }
         }
 

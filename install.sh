@@ -54,20 +54,17 @@ fi
 echo -e "Jellyfin config path: ${GREEN}$JELLYFIN_CONFIG${NC}"
 echo ""
 
-# Step 1: Create directories
-echo -e "${YELLOW}[1/4] Creating directories...${NC}"
+# Step 1: Create plugin directory
+echo -e "${YELLOW}[1/3] Creating plugin directory...${NC}"
 
 PLUGIN_DIR="$JELLYFIN_CONFIG/data/plugins/RarArchiveReader"
-INIT_DIR="$JELLYFIN_CONFIG/custom-cont-init.d"
 
 mkdir -p "$PLUGIN_DIR"
-mkdir -p "$INIT_DIR"
 
 echo "  Created: $PLUGIN_DIR"
-echo "  Created: $INIT_DIR"
 
 # Step 2: Copy plugin files
-echo -e "${YELLOW}[2/4] Installing plugin...${NC}"
+echo -e "${YELLOW}[2/3] Installing plugin...${NC}"
 
 if [ -f "$SCRIPT_DIR/bin/Release/net8.0/Jellyfin.Plugin.RarArchiveReader.dll" ]; then
     cp "$SCRIPT_DIR/bin/Release/net8.0/Jellyfin.Plugin.RarArchiveReader.dll" "$PLUGIN_DIR/"
@@ -83,15 +80,8 @@ else
     exit 1
 fi
 
-# Step 3: Copy install script
-echo -e "${YELLOW}[3/4] Installing rar2fs setup script...${NC}"
-
-cp "$SCRIPT_DIR/scripts/install-rar2fs.sh" "$INIT_DIR/"
-chmod +x "$INIT_DIR/install-rar2fs.sh"
-echo "  Copied install-rar2fs.sh to custom-cont-init.d"
-
-# Step 4: Set permissions
-echo -e "${YELLOW}[4/4] Setting permissions...${NC}"
+# Step 3: Set permissions
+echo -e "${YELLOW}[3/3] Setting permissions...${NC}"
 
 # Try to set ownership to match Jellyfin user (usually 1000:100 for linuxserver)
 if command -v chown &> /dev/null; then
@@ -109,21 +99,12 @@ echo -e "${GREEN}========================================${NC}"
 echo ""
 echo "Next steps:"
 echo ""
-echo "1. Make sure your docker-compose.yml has these settings:"
-echo ""
-echo -e "${YELLOW}   devices:"
-echo "     - /dev/fuse:/dev/fuse"
-echo "   cap_add:"
-echo "     - SYS_ADMIN"
-echo "   security_opt:"
-echo "     - apparmor:unconfined"
-echo "   volumes:"
-echo -e "     - $INIT_DIR:/custom-cont-init.d:ro${NC}"
-echo ""
-echo "2. Restart Jellyfin:"
+echo "1. Restart Jellyfin:"
 echo ""
 echo -e "${YELLOW}   docker-compose down && docker-compose up -d${NC}"
 echo ""
-echo "First startup will take 3-5 minutes to build rar2fs."
-echo "Subsequent startups are fast (~10 seconds)."
+echo "2. Go to Dashboard > Scheduled Tasks > Process RAR Archives > Run"
+echo ""
+echo "The plugin will create .strm files for any RAR archives"
+echo "containing media files in your library paths."
 echo ""

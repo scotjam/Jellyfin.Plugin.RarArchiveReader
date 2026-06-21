@@ -57,21 +57,8 @@ namespace Jellyfin.Plugin.RarArchiveReader
             {
                 // Get the file system instance from plugin singleton
                 var fileSystem = Plugin.GetFileSystem();
-                var mountManager = Plugin.GetMountManager();
 
-                // Try to mount with rar2fs if configured
-                if (config.PreferRar2fs && mountManager.IsRar2fsAvailable)
-                {
-                    var mountPoint = mountManager.MountArchive(args.Path);
-                    if (mountPoint != null)
-                    {
-                        // Archive mounted successfully
-                        // Return null to let Jellyfin scan the mounted files normally
-                        return null;
-                    }
-                }
-
-                // Fallback: Get entries from the archive for logging
+                // Get entries from the archive for detection
                 var entries = fileSystem.GetArchiveEntries(args.Path);
                 if (entries.Count > 0)
                 {

@@ -3,9 +3,9 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Web;
 using System.Xml.Linq;
 using MediaBrowser.Model.Tasks;
 using Microsoft.Extensions.Logging;
@@ -13,9 +13,8 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.RarArchiveReader
 {
     /// <summary>
-    /// Scheduled task that mounts RAR archives using rar2fs.
+    /// Scheduled task that creates STRM files for media inside RAR archives.
     /// Can be run manually or on a schedule (default: every 6 hours).
-    /// Note: rar2fs must be pre-installed via the install-rar2fs.sh script.
     /// </summary>
     public class RarArchiveStartupTask : IScheduledTask
     {
@@ -32,13 +31,13 @@ namespace Jellyfin.Plugin.RarArchiveReader
         }
 
         /// <inheritdoc />
-        public string Name => "Mount RAR Archives";
+        public string Name => "Process RAR Archives";
 
         /// <inheritdoc />
         public string Key => "RarArchiveMountTask";
 
         /// <inheritdoc />
-        public string Description => "Mounts RAR archives using rar2fs and triggers library scan";
+        public string Description => "Creates STRM files for media inside RAR archives and triggers library scan";
 
         /// <inheritdoc />
         public string Category => "Library";
@@ -55,24 +54,15 @@ namespace Jellyfin.Plugin.RarArchiveReader
                     return;
                 }
 
-                _logger.LogInformation("Starting RAR archive mounting task");
+                _logger.LogInformation("Starting RAR archive processing task");
                 progress.Report(0);
 
-                var mountManager = Plugin.GetMountManager();
                 var fileSystem = Plugin.GetFileSystem();
-
-                // Check if rar2fs is available
-                if (!config.PreferRar2fs || !mountManager.IsRar2fsAvailable)
-                {
-                    _logger.LogInformation("rar2fs is not available or not preferred, skipping mount task");
-                    progress.Report(100);
-                    return;
-                }
 
                 progress.Report(10);
                 cancellationToken.ThrowIfCancellationRequested();
 
-                // Step 2: Discover library paths from Jellyfin config (20% of progress)
+                // Step 1: Discover library paths from Jellyfin config
                 _logger.LogInformation("Discovering library paths from Jellyfin configuration...");
                 var libraryPaths = GetLibraryPathsFromConfig();
 
@@ -89,26 +79,28 @@ namespace Jellyfin.Plugin.RarArchiveReader
 
                 cancellationToken.ThrowIfCancellationRequested();
 
-                // Step 3: Find all RAR files (30% of progress)
+                // Step 2: Find all RAR files
                 var rarFiles = new List<string>();
+                var deniedPaths = new List<string>();
                 foreach (var path in libraryPaths)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
+                    if (!Directory.Exists(path))
+                    {
+                        _logger.LogDebug("Library path does not exist: {Path}", path);
+                        continue;
+                    }
+
                     try
                     {
-                        if (!Directory.Exists(path))
-                        {
-                            _logger.LogDebug("Library path does not exist: {Path}", path);
-                            continue;
-                        }
-
-                        var filesInPath = Directory.EnumerateFiles(path, "*.rar", SearchOption.AllDirectories)
-                            .Where(f => RarFileSystem.IsRarArchive(f))
-                            .ToList();
-
+                        var filesInPath = RarFileSystem.FindRarFiles(path, deniedPaths, cancellationToken);
                         rarFiles.AddRange(filesInPath);
                         _logger.LogDebug("Found {Count} RAR files in {Path}", filesInPath.Count, path);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
                     }
                     catch (Exception ex)
                     {
@@ -116,19 +108,12 @@ namespace Jellyfin.Plugin.RarArchiveReader
                     }
                 }
 
+                RarFileSystem.LogDeniedPaths(_logger, deniedPaths);
                 progress.Report(30);
 
-                // Group RAR files by directory - rar2fs mounts directories, not individual files
-                var directoriesWithRar = rarFiles
-                    .Select(f => Path.GetDirectoryName(f))
-                    .Where(d => !string.IsNullOrEmpty(d))
-                    .Distinct()
-                    .ToList();
+                _logger.LogInformation("Found {Count} RAR archives", rarFiles.Count);
 
-                _logger.LogInformation("Found {Count} RAR archives in {DirCount} directories",
-                    rarFiles.Count, directoriesWithRar.Count);
-
-                if (directoriesWithRar.Count == 0)
+                if (rarFiles.Count == 0)
                 {
                     _logger.LogInformation("No RAR archives found in library paths");
                     progress.Report(100);
@@ -137,94 +122,67 @@ namespace Jellyfin.Plugin.RarArchiveReader
 
                 cancellationToken.ThrowIfCancellationRequested();
 
-                // Step 4: Mount all directories (30-90% of progress)
+                // Step 3: Create STRM files for each RAR archive (30-90% of progress)
                 int processedCount = 0;
-                int mountedCount = 0;
-                int skippedCount = 0;
+                int strmCount = 0;
 
-                foreach (var directory in directoriesWithRar!)
+                foreach (var rarFile in rarFiles)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
                     try
                     {
-                        // Check if already mounted (UNRAR folder exists and has content)
-                        var unrarPath = Path.Combine(directory!, "UNRAR");
-                        if (Directory.Exists(unrarPath) && Directory.GetFileSystemEntries(unrarPath).Length > 0)
-                        {
-                            _logger.LogDebug("Directory already mounted: {Directory}", directory);
-                            skippedCount++;
-                            processedCount++;
-                            continue;
-                        }
-
-                        // Get a representative RAR file from this directory to check for media
-                        var representativeRar = rarFiles.FirstOrDefault(f =>
-                            Path.GetDirectoryName(f) == directory);
-
-                        if (representativeRar == null)
-                        {
-                            processedCount++;
-                            continue;
-                        }
-
-                        // Check if archive contains media files
-                        var entries = fileSystem.GetArchiveEntries(representativeRar);
+                        var entries = fileSystem.GetArchiveEntries(rarFile);
                         var hasMedia = entries.Any(e => IsMediaFile(e.Key, config));
 
                         if (!hasMedia)
                         {
-                            _logger.LogDebug("Archive contains no media files, skipping: {Directory}", directory);
+                            _logger.LogDebug("Archive contains no media files, skipping: {Archive}", rarFile);
                             processedCount++;
                             continue;
                         }
 
-                        // Try to mount
-                        var mountPoint = mountManager.MountArchive(representativeRar);
-                        if (mountPoint != null)
+                        var created = CreateStrmFiles(rarFile, entries, config);
+                        if (created > 0)
                         {
-                            _logger.LogInformation("Mounted: {Directory} -> {MountPoint}", directory, mountPoint);
-                            mountedCount++;
-                        }
-                        else
-                        {
-                            _logger.LogWarning("Failed to mount: {Directory}", directory);
+                            _logger.LogInformation("Created {Count} STRM files for {Archive}", created, rarFile);
+                            strmCount += created;
                         }
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "Error mounting RAR directory: {Directory}", directory);
+                        _logger.LogError(ex, "Error processing RAR archive: {Archive}", rarFile);
                     }
 
                     processedCount++;
-                    progress.Report(30 + ((double)processedCount / directoriesWithRar.Count * 60));
+                    progress.Report(30 + ((double)processedCount / rarFiles.Count * 60));
                 }
 
-                _logger.LogInformation("Mounting complete: {Mounted} mounted, {Skipped} already mounted, {Total} total directories",
-                    mountedCount, skippedCount, directoriesWithRar.Count);
+                _logger.LogInformation("Processing complete: created {StrmCount} STRM files from {Total} RAR archives",
+                    strmCount, rarFiles.Count);
 
                 progress.Report(90);
 
                 cancellationToken.ThrowIfCancellationRequested();
 
-                // Step 5: Trigger library scan (90-100% of progress)
-                if (mountedCount > 0)
+                // Step 4: Trigger library scan
+                if (strmCount > 0)
                 {
-                    _logger.LogInformation("Triggering library scan to detect newly mounted content...");
+                    _logger.LogInformation("Triggering library scan to detect newly created STRM files...");
                     await TriggerLibraryScanAsync(cancellationToken);
                 }
 
                 progress.Report(100);
-                _logger.LogInformation("RAR archive startup task complete");
+                _logger.LogInformation("RAR archive processing task complete");
             }
             catch (OperationCanceledException)
             {
-                _logger.LogInformation("RAR archive startup task was cancelled");
+                _logger.LogInformation("RAR archive processing task was cancelled");
                 throw;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error in RAR archive startup task");
+                _logger.LogError(ex, "Error in RAR archive processing task");
                 throw;
             }
         }
@@ -232,7 +190,6 @@ namespace Jellyfin.Plugin.RarArchiveReader
         /// <inheritdoc />
         public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
         {
-            // Run on startup and periodically
             return new[]
             {
                 new TaskTriggerInfo
@@ -254,7 +211,6 @@ namespace Jellyfin.Plugin.RarArchiveReader
         {
             var paths = new HashSet<string>();
 
-            // Read from Jellyfin's library configuration files
             var configBasePaths = new[]
             {
                 "/config/data/root/default",  // linuxserver container
@@ -272,7 +228,6 @@ namespace Jellyfin.Plugin.RarArchiveReader
 
                 try
                 {
-                    // Find all options.xml files in library subdirectories
                     var optionsFiles = Directory.EnumerateFiles(configBasePath, "options.xml", SearchOption.AllDirectories);
 
                     foreach (var optionsFile in optionsFiles)
@@ -318,7 +273,6 @@ namespace Jellyfin.Plugin.RarArchiveReader
         {
             try
             {
-                // Try common Jellyfin ports
                 var ports = new[] { 8096, 8920 };
 
                 foreach (var port in ports)
@@ -346,6 +300,62 @@ namespace Jellyfin.Plugin.RarArchiveReader
             {
                 _logger.LogWarning(ex, "Error triggering library scan");
             }
+        }
+
+        private int CreateStrmFiles(string rarFile, List<ArchiveEntryInfo> entries, Configuration.PluginConfiguration config)
+        {
+            int createdCount = 0;
+            var archiveDir = Path.GetDirectoryName(rarFile);
+
+            if (string.IsNullOrEmpty(archiveDir))
+            {
+                return 0;
+            }
+
+            foreach (var entry in entries)
+            {
+                if (!IsMediaFile(entry.Key, config))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    var mediaFileName = Path.GetFileName(entry.Key);
+                    var strmFileName = Path.ChangeExtension(mediaFileName, ".strm");
+                    string strmPath = Path.Combine(archiveDir, strmFileName);
+
+                    var encodedArchivePath = HttpUtility.UrlEncode(rarFile);
+                    var encodedEntryPath = HttpUtility.UrlEncode(entry.Key);
+                    var streamUrl = $"http://localhost:8096/RarStream/{encodedArchivePath}/{encodedEntryPath}";
+
+                    if (File.Exists(strmPath))
+                    {
+                        var existingContent = File.ReadAllText(strmPath).Trim();
+                        if (existingContent == streamUrl)
+                        {
+                            _logger.LogDebug("STRM file already up to date: {Path}", strmPath);
+                            createdCount++;
+                            continue;
+                        }
+
+                        _logger.LogInformation("Updating STRM file with new RAR path: {Path}", strmPath);
+                        File.WriteAllText(strmPath, streamUrl);
+                        createdCount++;
+                        continue;
+                    }
+
+                    File.WriteAllText(strmPath, streamUrl);
+                    _logger.LogDebug("Created STRM file: {Path} -> {Url}", strmPath, streamUrl);
+                    createdCount++;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to create/update .strm file for entry: {Entry}", entry.Key);
+                }
+            }
+
+            return createdCount;
         }
 
         private bool IsMediaFile(string filename, Configuration.PluginConfiguration config)
