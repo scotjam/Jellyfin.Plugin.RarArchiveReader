@@ -194,11 +194,11 @@ namespace Jellyfin.Plugin.RarArchiveReader
             {
                 new TaskTriggerInfo
                 {
-                    Type = TaskTriggerInfo.TriggerStartup
+                    Type = TaskTriggerInfoType.StartupTrigger
                 },
                 new TaskTriggerInfo
                 {
-                    Type = TaskTriggerInfo.TriggerInterval,
+                    Type = TaskTriggerInfoType.IntervalTrigger,
                     IntervalTicks = TimeSpan.FromHours(6).Ticks
                 }
             };
