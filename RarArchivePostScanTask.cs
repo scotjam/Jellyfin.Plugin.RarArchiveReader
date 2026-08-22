@@ -19,16 +19,19 @@ namespace Jellyfin.Plugin.RarArchiveReader
     {
         private readonly ILogger<RarArchivePostScanTask> _logger;
         private readonly ILibraryManager _libraryManager;
+        private readonly ILibraryMonitor _libraryMonitor;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="RarArchivePostScanTask"/> class.
         /// </summary>
         /// <param name="logger">The logger.</param>
         /// <param name="libraryManager">The library manager, used to prune stale database items.</param>
-        public RarArchivePostScanTask(ILogger<RarArchivePostScanTask> logger, ILibraryManager libraryManager)
+        /// <param name="libraryMonitor">The library monitor, used to refresh folders that received new STRM files after the scan.</param>
+        public RarArchivePostScanTask(ILogger<RarArchivePostScanTask> logger, ILibraryManager libraryManager, ILibraryMonitor libraryMonitor)
         {
             _logger = logger;
             _libraryManager = libraryManager;
+            _libraryMonitor = libraryMonitor;
         }
 
         /// <inheritdoc />
@@ -99,6 +102,7 @@ namespace Jellyfin.Plugin.RarArchiveReader
 
                 int processedCount = 0;
                 int mountedCount = 0;
+                var changedStrmFiles = new List<string>();
 
                 // Media file names (e.g. "movie.mkv") found inside the RAR archives this run.
                 // Used to safely identify stale DB rows that are leftovers of RAR content.
@@ -110,11 +114,11 @@ namespace Jellyfin.Plugin.RarArchiveReader
 
                     try
                     {
-                        _logger.LogInformation("Processing RAR archive: {Archive}", rarFile);
+                        _logger.LogDebug("Processing RAR archive: {Archive}", rarFile);
 
                         // Check if this archive contains media files
                         var entries = fileSystem.GetArchiveEntries(rarFile);
-                        var mediaEntries = entries.Where(e => IsMediaFile(e.Key, config)).ToList();
+                        var mediaEntries = entries.Where(e => StrmFileHelper.IsMediaFile(e.Key, config)).ToList();
 
                         if (mediaEntries.Count == 0)
                         {
@@ -132,15 +136,12 @@ namespace Jellyfin.Plugin.RarArchiveReader
                             }
                         }
 
-                        _logger.LogInformation("Archive {Archive} contains {Count} media files", rarFile, mediaEntries.Count);
+                        _logger.LogDebug("Archive {Archive} contains {Count} media files", rarFile, mediaEntries.Count);
 
                         // Create .strm files for direct streaming without extraction
-                        var strmCount = CreateStrmFiles(rarFile, entries, config);
-                        if (strmCount > 0)
-                        {
-                            _logger.LogInformation("Created {Count} .strm files for {Archive}", strmCount, rarFile);
-                            mountedCount += strmCount;
-                        }
+                        var result = StrmFileHelper.CreateStrmFiles(_logger, rarFile, entries, config);
+                        mountedCount += result.Total;
+                        changedStrmFiles.AddRange(result.Changed);
                     }
                     catch (Exception ex)
                     {
@@ -151,8 +152,23 @@ namespace Jellyfin.Plugin.RarArchiveReader
                     progress.Report(50 + ((double)processedCount / rarFiles.Count * 50)); // Last 50% is processing
                 }
 
-                _logger.LogInformation("RAR archive post-scan complete. Processed {Processed}/{Total} archives, mounted {Mounted}",
-                    processedCount, rarFiles.Count, mountedCount);
+                _logger.LogInformation("RAR archive post-scan complete. Processed {Processed}/{Total} archives, {Mounted} STRM files ({Changed} new/updated)",
+                    processedCount, rarFiles.Count, mountedCount, changedStrmFiles.Count);
+
+                // The scan that triggered us has already finished resolving items, so anything we
+                // created here would otherwise wait for the next scan. Ask the library monitor to
+                // refresh just the affected folders.
+                foreach (var strmPath in changedStrmFiles)
+                {
+                    try
+                    {
+                        _libraryMonitor.ReportFileSystemChanged(strmPath);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Could not request refresh for {Path}", strmPath);
+                    }
+                }
 
                 // Clean up orphaned .strm files (pointing to non-existent RAR archives)
                 CleanupOrphanedStrmFiles(libraryPaths);
@@ -240,106 +256,6 @@ namespace Jellyfin.Plugin.RarArchiveReader
             }
 
             return paths.ToList();
-        }
-
-        private bool IsMediaFile(string filename, Configuration.PluginConfiguration config)
-        {
-            var extension = Path.GetExtension(filename).ToLowerInvariant();
-
-            var allExtensions = new List<string>();
-
-            if (!string.IsNullOrEmpty(config.SupportedVideoExtensions))
-            {
-                allExtensions.AddRange(config.SupportedVideoExtensions.Split(',', StringSplitOptions.RemoveEmptyEntries));
-            }
-
-            if (!string.IsNullOrEmpty(config.SupportedAudioExtensions))
-            {
-                allExtensions.AddRange(config.SupportedAudioExtensions.Split(',', StringSplitOptions.RemoveEmptyEntries));
-            }
-
-            if (!string.IsNullOrEmpty(config.SupportedImageExtensions))
-            {
-                allExtensions.AddRange(config.SupportedImageExtensions.Split(',', StringSplitOptions.RemoveEmptyEntries));
-            }
-
-            return allExtensions.Any(ext => ext.Trim().Equals(extension, StringComparison.OrdinalIgnoreCase));
-        }
-
-        /// <summary>
-        /// Creates or updates .strm files for media entries in a RAR archive.
-        /// These files allow Jellyfin to see the media and stream directly from the archive.
-        /// Updates existing .strm files if the RAR archive path has changed.
-        /// </summary>
-        /// <param name="rarFile">Path to the RAR archive.</param>
-        /// <param name="entries">List of entries in the archive.</param>
-        /// <param name="config">Plugin configuration.</param>
-        /// <returns>Number of .strm files created or updated.</returns>
-        private int CreateStrmFiles(string rarFile, List<ArchiveEntryInfo> entries, Configuration.PluginConfiguration config)
-        {
-            int createdCount = 0;
-            var archiveDir = Path.GetDirectoryName(rarFile);
-
-            if (string.IsNullOrEmpty(archiveDir))
-            {
-                return 0;
-            }
-
-            foreach (var entry in entries)
-            {
-                if (!IsMediaFile(entry.Key, config))
-                {
-                    continue;
-                }
-
-                try
-                {
-                    // Get the media filename from the entry
-                    var mediaFileName = Path.GetFileName(entry.Key);
-                    var strmFileName = Path.ChangeExtension(mediaFileName, ".strm");
-
-                    // Put .strm file in the same directory as the RAR file
-                    // This ensures Jellyfin uses the correct folder name for the show
-                    string strmPath = Path.Combine(archiveDir, strmFileName);
-
-                    // Create the expected streaming URL
-                    // Format: http://localhost:8096/RarStream/{encodedArchivePath}/{encodedEntryPath}
-                    var encodedArchivePath = HttpUtility.UrlEncode(rarFile);
-                    var encodedEntryPath = HttpUtility.UrlEncode(entry.Key);
-                    var streamUrl = $"http://localhost:8096/RarStream/{encodedArchivePath}/{encodedEntryPath}";
-
-                    // Check if .strm file already exists
-                    if (File.Exists(strmPath))
-                    {
-                        // Read existing content and check if it needs updating
-                        var existingContent = File.ReadAllText(strmPath).Trim();
-                        if (existingContent == streamUrl)
-                        {
-                            _logger.LogDebug("STRM file already up to date: {Path}", strmPath);
-                            createdCount++;
-                            continue;
-                        }
-
-                        // URL has changed (RAR file moved), update the .strm file
-                        _logger.LogInformation("Updating STRM file with new RAR path: {Path}", strmPath);
-                        File.WriteAllText(strmPath, streamUrl);
-                        _logger.LogDebug("Updated STRM file: {Path} -> {Url}", strmPath, streamUrl);
-                        createdCount++;
-                        continue;
-                    }
-
-                    // Write the new .strm file
-                    File.WriteAllText(strmPath, streamUrl);
-                    _logger.LogDebug("Created STRM file: {Path} -> {Url}", strmPath, streamUrl);
-                    createdCount++;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Failed to create/update .strm file for entry: {Entry}", entry.Key);
-                }
-            }
-
-            return createdCount;
         }
 
         /// <summary>
