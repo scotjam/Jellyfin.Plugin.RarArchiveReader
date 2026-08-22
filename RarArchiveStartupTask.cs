@@ -2,11 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Web;
 using System.Xml.Linq;
+using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Tasks;
 using Microsoft.Extensions.Logging;
 
@@ -19,15 +18,20 @@ namespace Jellyfin.Plugin.RarArchiveReader
     public class RarArchiveStartupTask : IScheduledTask
     {
         private readonly ILogger<RarArchiveStartupTask> _logger;
-        private static readonly HttpClient _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        private readonly ILibraryMonitor _libraryMonitor;
+        private readonly ILibraryManager _libraryManager;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="RarArchiveStartupTask"/> class.
         /// </summary>
         /// <param name="logger">The logger.</param>
-        public RarArchiveStartupTask(ILogger<RarArchiveStartupTask> logger)
+        /// <param name="libraryMonitor">Library monitor, used to refresh folders that received new STRM files.</param>
+        /// <param name="libraryManager">Library manager, used as a fallback to queue a full scan.</param>
+        public RarArchiveStartupTask(ILogger<RarArchiveStartupTask> logger, ILibraryMonitor libraryMonitor, ILibraryManager libraryManager)
         {
             _logger = logger;
+            _libraryMonitor = libraryMonitor;
+            _libraryManager = libraryManager;
         }
 
         /// <inheritdoc />
@@ -125,6 +129,7 @@ namespace Jellyfin.Plugin.RarArchiveReader
                 // Step 3: Create STRM files for each RAR archive (30-90% of progress)
                 int processedCount = 0;
                 int strmCount = 0;
+                var changedStrmFiles = new List<string>();
 
                 foreach (var rarFile in rarFiles)
                 {
@@ -133,7 +138,7 @@ namespace Jellyfin.Plugin.RarArchiveReader
                     try
                     {
                         var entries = fileSystem.GetArchiveEntries(rarFile);
-                        var hasMedia = entries.Any(e => IsMediaFile(e.Key, config));
+                        var hasMedia = entries.Any(e => StrmFileHelper.IsMediaFile(e.Key, config));
 
                         if (!hasMedia)
                         {
@@ -142,12 +147,9 @@ namespace Jellyfin.Plugin.RarArchiveReader
                             continue;
                         }
 
-                        var created = CreateStrmFiles(rarFile, entries, config);
-                        if (created > 0)
-                        {
-                            _logger.LogInformation("Created {Count} STRM files for {Archive}", created, rarFile);
-                            strmCount += created;
-                        }
+                        var result = StrmFileHelper.CreateStrmFiles(_logger, rarFile, entries, config);
+                        strmCount += result.Total;
+                        changedStrmFiles.AddRange(result.Changed);
                     }
                     catch (Exception ex)
                     {
@@ -158,22 +160,22 @@ namespace Jellyfin.Plugin.RarArchiveReader
                     progress.Report(30 + ((double)processedCount / rarFiles.Count * 60));
                 }
 
-                _logger.LogInformation("Processing complete: created {StrmCount} STRM files from {Total} RAR archives",
-                    strmCount, rarFiles.Count);
+                _logger.LogInformation("Processing complete: {StrmCount} STRM files ({Changed} new/updated) from {Total} RAR archives",
+                    strmCount, changedStrmFiles.Count, rarFiles.Count);
 
                 progress.Report(90);
 
                 cancellationToken.ThrowIfCancellationRequested();
 
-                // Step 4: Trigger library scan
-                if (strmCount > 0)
+                // Step 4: Get Jellyfin to pick up the new/updated STRM files.
+                if (changedStrmFiles.Count > 0)
                 {
-                    _logger.LogInformation("Triggering library scan to detect newly created STRM files...");
-                    await TriggerLibraryScanAsync(cancellationToken);
+                    NotifyLibrary(changedStrmFiles);
                 }
 
                 progress.Report(100);
                 _logger.LogInformation("RAR archive processing task complete");
+                await Task.CompletedTask;
             }
             catch (OperationCanceledException)
             {
@@ -267,124 +269,33 @@ namespace Jellyfin.Plugin.RarArchiveReader
         }
 
         /// <summary>
-        /// Triggers a Jellyfin library scan via the local HTTP API.
+        /// Asks Jellyfin (in-process) to refresh the folders that received new or updated STRM files.
+        /// Uses the same mechanism as real-time monitoring, so only the affected library folders are
+        /// re-validated. Falls back to queueing a full library scan if that fails.
         /// </summary>
-        private async Task TriggerLibraryScanAsync(CancellationToken cancellationToken)
+        private void NotifyLibrary(List<string> changedStrmFiles)
         {
             try
             {
-                var ports = new[] { 8096, 8920 };
-
-                foreach (var port in ports)
+                foreach (var strmPath in changedStrmFiles)
                 {
-                    try
-                    {
-                        var url = $"http://localhost:{port}/Library/Refresh";
-                        var response = await _httpClient.PostAsync(url, null, cancellationToken);
-
-                        if (response.IsSuccessStatusCode)
-                        {
-                            _logger.LogInformation("Library scan triggered successfully on port {Port}", port);
-                            return;
-                        }
-                    }
-                    catch (HttpRequestException)
-                    {
-                        // Try next port
-                    }
+                    _libraryMonitor.ReportFileSystemChanged(strmPath);
                 }
 
-                _logger.LogWarning("Could not trigger library scan - Jellyfin API not accessible");
+                _logger.LogInformation("Requested library refresh for {Count} new/updated STRM file(s)", changedStrmFiles.Count);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Error triggering library scan");
-            }
-        }
-
-        private int CreateStrmFiles(string rarFile, List<ArchiveEntryInfo> entries, Configuration.PluginConfiguration config)
-        {
-            int createdCount = 0;
-            var archiveDir = Path.GetDirectoryName(rarFile);
-
-            if (string.IsNullOrEmpty(archiveDir))
-            {
-                return 0;
-            }
-
-            foreach (var entry in entries)
-            {
-                if (!IsMediaFile(entry.Key, config))
-                {
-                    continue;
-                }
-
+                _logger.LogWarning(ex, "Could not request targeted library refresh; queueing a full library scan instead");
                 try
                 {
-                    var mediaFileName = Path.GetFileName(entry.Key);
-                    var strmFileName = Path.ChangeExtension(mediaFileName, ".strm");
-                    string strmPath = Path.Combine(archiveDir, strmFileName);
-
-                    var encodedArchivePath = HttpUtility.UrlEncode(rarFile);
-                    var encodedEntryPath = HttpUtility.UrlEncode(entry.Key);
-                    var streamUrl = $"http://localhost:8096/RarStream/{encodedArchivePath}/{encodedEntryPath}";
-
-                    if (File.Exists(strmPath))
-                    {
-                        var existingContent = File.ReadAllText(strmPath).Trim();
-                        if (existingContent == streamUrl)
-                        {
-                            _logger.LogDebug("STRM file already up to date: {Path}", strmPath);
-                            createdCount++;
-                            continue;
-                        }
-
-                        _logger.LogInformation("Updating STRM file with new RAR path: {Path}", strmPath);
-                        File.WriteAllText(strmPath, streamUrl);
-                        createdCount++;
-                        continue;
-                    }
-
-                    File.WriteAllText(strmPath, streamUrl);
-                    _logger.LogDebug("Created STRM file: {Path} -> {Url}", strmPath, streamUrl);
-                    createdCount++;
+                    _libraryManager.QueueLibraryScan();
                 }
-                catch (Exception ex)
+                catch (Exception ex2)
                 {
-                    _logger.LogWarning(ex, "Failed to create/update .strm file for entry: {Entry}", entry.Key);
+                    _logger.LogWarning(ex2, "Could not queue library scan");
                 }
             }
-
-            return createdCount;
-        }
-
-        private bool IsMediaFile(string filename, Configuration.PluginConfiguration config)
-        {
-            var extension = Path.GetExtension(filename).ToLowerInvariant();
-            var allExtensions = GetMediaExtensions(config);
-            return allExtensions.Any(ext => ext.Trim().Equals(extension, StringComparison.OrdinalIgnoreCase));
-        }
-
-        private List<string> GetMediaExtensions(Configuration.PluginConfiguration config)
-        {
-            var allExtensions = new List<string>();
-
-            if (!string.IsNullOrEmpty(config.SupportedVideoExtensions))
-            {
-                allExtensions.AddRange(config.SupportedVideoExtensions.Split(',', StringSplitOptions.RemoveEmptyEntries));
-            }
-
-            if (!string.IsNullOrEmpty(config.SupportedAudioExtensions))
-            {
-                allExtensions.AddRange(config.SupportedAudioExtensions.Split(',', StringSplitOptions.RemoveEmptyEntries));
-            }
-
-            if (!string.IsNullOrEmpty(config.SupportedImageExtensions))
-            {
-                allExtensions.AddRange(config.SupportedImageExtensions.Split(',', StringSplitOptions.RemoveEmptyEntries));
-            }
-
-            return allExtensions.Select(e => e.Trim()).ToList();
         }
     }
 }

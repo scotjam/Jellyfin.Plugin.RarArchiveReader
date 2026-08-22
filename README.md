@@ -86,10 +86,20 @@ The plugin will:
 
 ## How It Works
 
-1. **On library scan**, the plugin:
-   - Finds all `.rar` files in your library paths
-   - Opens each archive and lists the media files inside
-   - Creates `.strm` files in the same folder as the RAR
+1. **During any library scan**, the plugin hooks into Jellyfin's item resolver:
+   - Every folder Jellyfin looks at is checked for a first RAR volume (`.rar`, `.part1.rar`, `.part01.rar`)
+   - The archive is opened and its media files are listed
+   - `.strm` files are written next to the RAR **and handed to Jellyfin in the same pass**, so the
+     movie/episode appears immediately - no second scan needed
+   - This works for "Scan All Libraries", a single-library scan **and** the real-time library
+     monitor refresh that fires when a new release folder appears (enable *Real time monitoring*
+     on the library to get the latter)
+
+   Two safety nets run as well:
+   - **Process RAR Archives** scheduled task (on startup and every 6 hours) sweeps all library paths
+   - A **post-scan task** runs after "Scan All Libraries" and also prunes orphaned `.strm` files and stale DB items
+
+   Both ask Jellyfin in-process to refresh only the folders that received new `.strm` files.
 
 2. **STRM file contents:**
    ```
@@ -187,7 +197,9 @@ dotnet build -c Release
 
 ### Architecture
 
-- **RarArchiveStartupTask / RarArchivePostScanTask**: Scan libraries and create STRM files for RAR archives
+- **RarArchiveResolver**: Item resolver that creates STRM files while Jellyfin scans (any scan type) and injects them into the current pass
+- **RarArchiveStartupTask / RarArchivePostScanTask**: Scheduled / post-scan sweeps of all library paths
+- **StrmFileHelper**: Shared STRM creation logic used by all three entry points
 - **RarStreamController**: HTTP endpoint that streams media from RAR archives
 - **RarFileSystem**: Virtual filesystem for archive reading
 - **RarArchiveReader**: SharpCompress-based archive reader
@@ -231,6 +243,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ## Changelog
+
+### 2.1.0
+
+- New releases are picked up on **any** library scan, including the real-time monitor refresh when a folder appears - previously only the 6-hourly task or a full scan created `.strm` files
+- `.strm` files created during a scan are injected into that scan, so the item shows up immediately
+- Library refresh after creating `.strm` files is now done in-process (`ILibraryMonitor`) instead of an unauthenticated HTTP call that always failed ("Jellyfin API not accessible")
+- STRM creation logic de-duplicated into `StrmFileHelper`; `.part2.rar`+ volumes are skipped
 
 ### 2.0.0
 
