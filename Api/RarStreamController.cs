@@ -85,21 +85,32 @@ namespace Jellyfin.Plugin.RarArchiveReader.Api
                     return NotFound($"Entry not found: {decodedEntryPath}");
                 }
 
-                // Get buffer size from configuration
+                // Determine content type based on file extension
+                var contentType = GetContentType(decodedEntryPath);
+
+                // Preferred path: stored (uncompressed) entries map 1:1 onto byte ranges of the
+                // volume files, so we can serve any seek instantly by reading the volumes directly.
+                // Practically every scene release is stored, so this is the normal case.
+                var segments = reader.TryGetStoredSegments(decodedEntryPath);
+                if (segments != null)
+                {
+                    _logger.LogInformation("Streaming {Entry} ({ContentType}, {Size} bytes, direct stored access, {Volumes} volume segment(s))",
+                        decodedEntryPath, contentType, entryInfo.Size, segments.Count);
+
+                    return File(new StoredRarStream(segments), contentType, enableRangeProcessing: true);
+                }
+
+                // Fallback for compressed entries: sequential decompression with a seek buffer.
                 var config = Plugin.Instance?.Configuration;
                 var bufferSizeMB = config?.StreamingBufferSizeMB ?? RarBufferedStream.DefaultBufferSizeMB;
 
-                // Create a buffered stream for memory-efficient seeking
                 var stream = new RarBufferedStream(
                     decodedArchivePath,
                     decodedEntryPath,
                     entryInfo.Size,
                     bufferSizeMB);
 
-                // Determine content type based on file extension
-                var contentType = GetContentType(decodedEntryPath);
-
-                _logger.LogInformation("Streaming {Entry} ({ContentType}, {Size} bytes, {Buffer}MB buffer)",
+                _logger.LogInformation("Streaming {Entry} ({ContentType}, {Size} bytes, sequential fallback, {Buffer}MB buffer)",
                     decodedEntryPath, contentType, entryInfo.Size, bufferSizeMB);
 
                 // Return the stream with range processing enabled (buffered stream supports seeking)
