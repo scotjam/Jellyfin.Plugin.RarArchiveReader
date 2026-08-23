@@ -174,9 +174,30 @@ namespace Jellyfin.Plugin.RarArchiveReader
 
         private void CloseEntryStream()
         {
-            _entryStream?.Dispose();
+            // SharpCompress entry streams can throw on Dispose when abandoned mid-read
+            // (e.g. the viewer stops playback). If that exception escaped here the
+            // archive below would never be disposed, leaking one file handle per RAR
+            // volume for every aborted playback session.
+            try
+            {
+                _entryStream?.Dispose();
+            }
+            catch (Exception)
+            {
+                // Ignore - releasing the archive below closes the underlying files.
+            }
+
             _entryStream = null;
-            _archive?.Dispose();
+
+            try
+            {
+                _archive?.Dispose();
+            }
+            catch (Exception)
+            {
+                // Ignore - nothing more we can do; the FileStreams are finalizable.
+            }
+
             _archive = null;
         }
 

@@ -14,9 +14,24 @@ namespace Jellyfin.Plugin.RarArchiveReader
     /// </summary>
     public class RarFileSystem : IDisposable
     {
+        /// <summary>
+        /// How long a cached reader may sit unused before its file handles are released.
+        /// Readers are only used synchronously (listing entries, checking existence,
+        /// looking up entry metadata before playback starts) — playback itself opens its
+        /// own archive handles — so anything idle this long is safe to close. Keeping
+        /// readers open indefinitely pinned ~20 file descriptors per archive and grew
+        /// the Jellyfin process to tens of thousands of open files.
+        /// </summary>
+        private static readonly TimeSpan IdleTtl = TimeSpan.FromMinutes(15);
+
+        /// <summary>How often the background sweep looks for idle readers.</summary>
+        private static readonly TimeSpan SweepInterval = TimeSpan.FromMinutes(5);
+
         private readonly ILogger _logger;
         private readonly Dictionary<string, RarArchiveReader> _openArchives;
         private readonly Dictionary<string, (int Count, long TotalLength, long MaxTicks)> _cacheStamps;
+        private readonly Dictionary<string, DateTime> _lastUsed;
+        private readonly Timer _sweepTimer;
         private readonly object _lock = new object();
         private bool _disposed;
 
@@ -29,6 +44,56 @@ namespace Jellyfin.Plugin.RarArchiveReader
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _openArchives = new Dictionary<string, RarArchiveReader>();
             _cacheStamps = new Dictionary<string, (int, long, long)>();
+            _lastUsed = new Dictionary<string, DateTime>();
+            _sweepTimer = new Timer(_ => EvictIdleReaders(), null, SweepInterval, SweepInterval);
+        }
+
+        /// <summary>
+        /// Closes cached readers that have not been used for <see cref="IdleTtl"/>,
+        /// releasing their file handles. Runs on a timer and is safe to call any time.
+        /// </summary>
+        public void EvictIdleReaders()
+        {
+            try
+            {
+                var cutoff = DateTime.UtcNow - IdleTtl;
+                int evicted;
+                int remaining;
+
+                lock (_lock)
+                {
+                    if (_disposed)
+                    {
+                        return;
+                    }
+
+                    var idle = _lastUsed.Where(kv => kv.Value < cutoff).Select(kv => kv.Key).ToList();
+
+                    foreach (var path in idle)
+                    {
+                        if (_openArchives.TryGetValue(path, out var reader))
+                        {
+                            reader.Dispose();
+                            _openArchives.Remove(path);
+                        }
+
+                        _cacheStamps.Remove(path);
+                        _lastUsed.Remove(path);
+                    }
+
+                    evicted = idle.Count;
+                    remaining = _openArchives.Count;
+                }
+
+                if (evicted > 0)
+                {
+                    _logger.LogInformation("Closed {Evicted} idle RAR reader(s); {Remaining} still cached", evicted, remaining);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error while evicting idle RAR readers");
+            }
         }
 
         /// <summary>
@@ -270,6 +335,7 @@ namespace Jellyfin.Plugin.RarArchiveReader
                     // "no media" after a hardlink/re-download under a long-running server).
                     if (_cacheStamps.TryGetValue(archivePath, out var cachedStamp) && cachedStamp == stamp)
                     {
+                        _lastUsed[archivePath] = DateTime.UtcNow;
                         return existingReader;
                     }
 
@@ -277,6 +343,7 @@ namespace Jellyfin.Plugin.RarArchiveReader
                     existingReader.Dispose();
                     _openArchives.Remove(archivePath);
                     _cacheStamps.Remove(archivePath);
+                    _lastUsed.Remove(archivePath);
                 }
 
                 var reader = new RarArchiveReader(archivePath, _logger);
@@ -284,6 +351,7 @@ namespace Jellyfin.Plugin.RarArchiveReader
                 {
                     _openArchives[archivePath] = reader;
                     _cacheStamps[archivePath] = stamp;
+                    _lastUsed[archivePath] = DateTime.UtcNow;
                     return reader;
                 }
 
@@ -373,6 +441,7 @@ namespace Jellyfin.Plugin.RarArchiveReader
                     reader.Dispose();
                     _openArchives.Remove(archivePath);
                     _cacheStamps.Remove(archivePath);
+                    _lastUsed.Remove(archivePath);
                 }
             }
         }
@@ -390,6 +459,7 @@ namespace Jellyfin.Plugin.RarArchiveReader
                 }
                 _openArchives.Clear();
                 _cacheStamps.Clear();
+                _lastUsed.Clear();
             }
         }
 
@@ -413,6 +483,7 @@ namespace Jellyfin.Plugin.RarArchiveReader
 
             if (disposing)
             {
+                _sweepTimer.Dispose();
                 CloseAll();
             }
 
