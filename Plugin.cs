@@ -24,10 +24,12 @@ namespace Jellyfin.Plugin.RarArchiveReader
         /// </summary>
         /// <param name="applicationPaths">Instance of the <see cref="IApplicationPaths"/> interface.</param>
         /// <param name="xmlSerializer">Instance of the <see cref="IXmlSerializer"/> interface.</param>
-        public Plugin(IApplicationPaths applicationPaths, IXmlSerializer xmlSerializer)
+        /// <param name="loggerFactory">Logger factory, used by plugin components created outside DI (e.g. the shared <see cref="RarFileSystem"/>).</param>
+        public Plugin(IApplicationPaths applicationPaths, IXmlSerializer xmlSerializer, ILoggerFactory loggerFactory)
             : base(applicationPaths, xmlSerializer)
         {
             Instance = this;
+            _loggerFactory = loggerFactory;
         }
 
         /// <inheritdoc />
