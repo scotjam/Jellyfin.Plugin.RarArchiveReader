@@ -98,15 +98,27 @@ namespace Jellyfin.Plugin.RarArchiveReader
 
         /// <summary>
         /// Builds the streaming URL that a STRM file should contain for an archive entry.
+        /// The base URL comes from configuration: clients direct-play STRM files by fetching
+        /// this URL themselves, so it must be an address they can reach - "localhost" is only
+        /// reachable by server-side ffmpeg.
         /// </summary>
         /// <param name="rarFile">Path to the first RAR volume.</param>
         /// <param name="entryKey">Entry path inside the archive.</param>
+        /// <param name="config">Plugin configuration (for the stream base URL).</param>
         /// <returns>The stream URL.</returns>
-        public static string GetStreamUrl(string rarFile, string entryKey)
+        public static string GetStreamUrl(string rarFile, string entryKey, Configuration.PluginConfiguration config)
         {
+            var baseUrl = config.StreamBaseUrl;
+            if (string.IsNullOrWhiteSpace(baseUrl))
+            {
+                baseUrl = "http://localhost:8096";
+            }
+
+            baseUrl = baseUrl.TrimEnd('/');
+
             var encodedArchivePath = HttpUtility.UrlEncode(rarFile);
             var encodedEntryPath = HttpUtility.UrlEncode(entryKey);
-            return $"http://localhost:8096/RarStream/{encodedArchivePath}/{encodedEntryPath}";
+            return $"{baseUrl}/RarStream/{encodedArchivePath}/{encodedEntryPath}";
         }
 
         /// <summary>
@@ -142,7 +154,7 @@ namespace Jellyfin.Plugin.RarArchiveReader
 
                     // Put the .strm next to the RAR so Jellyfin uses the release folder name.
                     var strmPath = Path.Combine(archiveDir, strmFileName);
-                    var streamUrl = GetStreamUrl(rarFile, entry.Key);
+                    var streamUrl = GetStreamUrl(rarFile, entry.Key, config);
 
                     if (File.Exists(strmPath))
                     {

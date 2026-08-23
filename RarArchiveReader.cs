@@ -272,6 +272,25 @@ namespace Jellyfin.Plugin.RarArchiveReader
         }
 
         /// <summary>
+        /// Tries to build a volume/offset map for direct seekable access to a stored entry.
+        /// Returns null when the entry is compressed, encrypted, or the map cannot be built.
+        /// </summary>
+        /// <param name="entryPath">Path of the entry within the archive.</param>
+        /// <returns>Ordered segments, or null.</returns>
+        public IReadOnlyList<StoredRarSegment>? TryGetStoredSegments(string entryPath)
+        {
+            if (_archive == null)
+            {
+                if (!Open())
+                {
+                    return null;
+                }
+            }
+
+            return StoredRarMap.TryBuild(_archive!, entryPath, _logger);
+        }
+
+        /// <summary>
         /// Checks if a specific entry exists in the archive.
         /// </summary>
         /// <param name="entryPath">Path of the entry within the archive.</param>
