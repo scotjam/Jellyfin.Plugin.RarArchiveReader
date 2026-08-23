@@ -57,9 +57,9 @@
                         <label class="inputLabel inputLabelUnfocused" for="streamBaseUrl">Stream base URL</label>
                         <input id="streamBaseUrl" type="text" is="emby-input" />
                         <div class="fieldDescription">
-                            Base URL written into .strm files. Clients fetch this URL directly when direct-playing,
-                            so use an address every client can reach (e.g. http://192.168.1.12:8096).
-                            "http://localhost:8096" only works for server-side transcoding.
+                            Base URL written into .strm files. At playback time the plugin automatically rewrites
+                            the host to the address each client used to reach the server, so the default
+                            (http://localhost:8096) is normally fine and works from any network.
                         </div>
                     </div>
 
