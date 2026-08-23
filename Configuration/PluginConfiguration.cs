@@ -30,10 +30,10 @@ namespace Jellyfin.Plugin.RarArchiveReader.Configuration
 
         /// <summary>
         /// Gets or sets the base URL written into .strm files for the /RarStream endpoint.
-        /// Must be reachable by BOTH the clients that direct-play (TVs, browsers, apps) AND
-        /// server-side ffmpeg (for transcoding). "http://localhost:8096" only works for
-        /// ffmpeg, so direct play fails on every client - set this to the server's
-        /// LAN address, e.g. "http://192.168.1.12:8096".
+        /// At playback time the plugin rewrites the URL's host to whatever address the client
+        /// used to reach the server, so this rarely needs changing. It is used as written only
+        /// by tools that read the .strm file without going through PlaybackInfo (e.g.
+        /// server-side ffmpeg), for which the default localhost address is correct.
         /// </summary>
         public string StreamBaseUrl { get; set; } = "http://localhost:8096";
 
