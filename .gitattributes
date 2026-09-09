@@ -1,0 +1,9 @@
+# Test fixtures must be byte-exact. The archives embed the source payloads
+# verbatim, so any line-ending translation on checkout (core.autocrlf=true is
+# the Windows default) would change payload.bin and break the SHA-256
+# comparisons in the regression suite.
+tests/fixtures/source/**    binary
+tests/fixtures/archives/**  binary
+
+# Shell scripts must keep LF so they run under bash on any platform.
+*.sh text eol=lf
