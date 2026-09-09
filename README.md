@@ -16,7 +16,8 @@ A Jellyfin plugin that enables playback of media files stored inside RAR archive
 
 ## Requirements
 
-- **Jellyfin**: Windows or Linux installation (tested with linuxserver/jellyfin Docker)
+- **Jellyfin**: 12.0 or newer, Windows or Linux (tested with linuxserver/jellyfin Docker).
+  For Jellyfin 10.11.x, build the `v2.2.1-jellyfin10.11` tag instead.
 - **No additional dependencies**: Uses built-in STRM file streaming
 
 ## Installation
@@ -30,7 +31,7 @@ Download or build these files:
 To build from source:
 ```bash
 dotnet build -c Release
-# Output: bin/Release/net8.0/
+# Output: bin/Release/net10.0/
 ```
 
 ### Step 2: Copy files to the plugin directory
@@ -187,10 +188,10 @@ Optional utility scripts are available in the `scripts/` folder. See [scripts/RE
 ## Building from Source
 
 ```bash
-# Prerequisites: .NET 8.0 SDK
+# Prerequisites: .NET 10.0 SDK
 dotnet build -c Release
 
-# Output: bin/Release/net8.0/
+# Output: bin/Release/net10.0/
 ```
 
 ## Technical Details
@@ -243,6 +244,17 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ## Changelog
+
+### 3.0.0
+
+- Target **Jellyfin 12.0** and **net10.0**. Requires Jellyfin 12.0 or newer — for 10.11.x servers build the `v2.2.1-jellyfin10.11` tag
+- No source changes were needed: the resolver, post-scan, scheduled-task and middleware APIs the plugin uses are unchanged in Jellyfin 12
+- Corrected `build.yaml`, which still declared version 1.0.0.0, ABI 10.9.0.0, net8.0 and the long-removed rar2fs mounting
+- SharpCompress stays pinned at 0.44.0 — the seekable stored-entry path reflects into its internals and needs testing before a bump
+
+### 2.2.1
+
+- Inject `ILoggerFactory` into the plugin so `RarFileSystem` log messages (idle reader eviction, volume-set change reopens) reach the log instead of a null logger
 
 ### 2.1.0
 

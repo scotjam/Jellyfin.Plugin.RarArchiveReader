@@ -1,27 +1,51 @@
 ---
 name: "RAR Archive Reader"
 guid: "a8f38b91-6c7d-4e9a-9f2b-1234567890ab"
-version: "1.0.0.0"
-targetAbi: "10.9.0.0"
-framework: "net8.0"
+version: "3.0.0.0"
+targetAbi: "12.0.0.0"
+framework: "net10.0"
 owner: "community"
-overview: "Play media files directly from RAR archives using rar2fs"
+overview: "Play media files directly from RAR archives, without extracting them"
 description: >
-  ALPHA SOFTWARE - USE AT YOUR OWN RISK. Data loss is possible.
-  This plugin enables playback of media files stored inside RAR archives without
-  manual extraction. Uses rar2fs for transparent FUSE mounting on Linux. The
-  SharpCompress fallback for Windows is completely untested. Only tested with
-  linuxserver/jellyfin Docker container.
+  ALPHA SOFTWARE - USE AT YOUR OWN RISK. Back up your media libraries and
+  Jellyfin configuration before installing.
+  This plugin enables playback of media stored inside RAR archives without
+  manual extraction. It creates .strm files next to each archive during library
+  scans and streams the media straight out of the archive on playback, with
+  direct seeking for stored (uncompressed) entries. No FUSE, no external tools
+  and no extra Docker privileges are required.
 category: "General"
 artifacts:
   - "Jellyfin.Plugin.RarArchiveReader.dll"
   - "SharpCompress.dll"
 changelog: >
-  ## 1.0.0
-  - Initial release
-  - rar2fs mounting for transparent RAR access
-  - Auto-discovery of library paths from Jellyfin config
-  - Multi-part archive support (.rar, .r00, .part1.rar)
-  - Automatic library scan trigger after mounting
-  - Fallback in-memory streaming via SharpCompress
-  - Configuration UI for settings
+  ## 3.0.0
+  - Target Jellyfin 12.0 and net10.0. Requires Jellyfin 12.0 or newer; use the
+    v2.2.1-jellyfin10.11 tag for Jellyfin 10.11.x servers.
+  - Corrected the plugin manifest, which still advertised 1.0.0 / ABI 10.9.0.0 /
+    net8.0 and the long-removed rar2fs mounting.
+
+  ## 2.2.1
+  - Inject ILoggerFactory so RarFileSystem logging (idle reader eviction,
+    volume-set change reopens) actually reaches the log.
+
+  ## 2.2.0
+  - Direct seekable streaming for stored RAR entries: any byte range is served
+    by seeking into the mapped volume files instead of decompressing from the
+    start, so players can read the trailing index immediately.
+  - Rewrite the /RarStream host in PlaybackInfo responses to the address the
+    client used, so direct play works from any network with no configuration.
+  - Add the StreamBaseUrl setting for the address written into .strm files.
+
+  ## 2.1.0
+  - Create .strm files during any library scan, including the real-time monitor
+    refresh that fires when a new folder appears.
+  - Request library refreshes in-process via ILibraryMonitor instead of an
+    unauthenticated HTTP call that always failed.
+  - Close cached RAR readers that have been idle for 15 minutes, releasing the
+    file handles they pinned.
+
+  ## 2.0.0
+  - Simplified to STRM-only mode - removed rar2fs/FUSE mounting code
+  - No Docker privileges required (no /dev/fuse, SYS_ADMIN, apparmor)
+  - Unified installation for Windows and Linux (just copy DLLs)
