@@ -210,6 +210,39 @@ dotnet build -c Release
 dotnet build -c Release -f net9.0
 ```
 
+## Tests
+
+```bash
+dotnet test tests/Jellyfin.Plugin.RarArchiveReader.Tests
+```
+
+Regression coverage runs against committed RAR fixtures spanning the format
+matrix — RAR4 and RAR5, stored and compressed, single and multi-volume, and both
+volume naming schemes:
+
+| Fixture | Format | Method | Volumes |
+|---------|--------|--------|---------|
+| `rar4-store-single`  | RAR4 | stored     | 1 (`.rar`) |
+| `rar4-store-multi`   | RAR4 | stored     | 7 (`.partN.rar`) |
+| `rar4-store-oldvol`  | RAR4 | stored     | 7 (`.rar` + `.rNN`) |
+| `rar4-comp-multi`    | RAR4 | compressed | 2 |
+| `rar5-store-multi`   | RAR5 | stored     | 7 |
+| `rar5-comp-single`   | RAR5 | compressed | 1 |
+| `rar5-comp-multi`    | RAR5 | compressed | 2 |
+| `rar5-comp-m3-multi` | RAR5 | `m3`       | 2 |
+
+For each format the tests assert that entries are listed with correct sizes,
+that extracted bytes are SHA-256 identical to the source payloads, and — the
+important one — that **direct stored access engages for stored entries and is
+refused for compressed ones**. A silent fall back to sequential reads is what
+made seeking unusable on large archives, so it is asserted rather than assumed.
+Stored archives additionally get random-access reads at offsets straddling
+volume seams and at the tail; compressed archives exercise the
+`RarBufferedStream` fallback including a backward seek.
+
+Fixtures are regenerated with `tests/fixtures/generate-fixtures.sh`, which needs
+RARLab's `rar` CLI (7-Zip and unrar can read RAR but cannot create it).
+
 ## Technical Details
 
 ### Architecture
