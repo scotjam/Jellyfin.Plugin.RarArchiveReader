@@ -16,9 +16,20 @@ A Jellyfin plugin that enables playback of media files stored inside RAR archive
 
 ## Requirements
 
-- **Jellyfin**: 12.0 or newer, Windows or Linux (tested with linuxserver/jellyfin Docker).
-  For Jellyfin 10.11.x, build the `v2.2.1-jellyfin10.11` tag instead.
+- **Jellyfin**: 10.11.x or 12.x, Windows or Linux (tested with linuxserver/jellyfin Docker)
 - **No additional dependencies**: Uses built-in STRM file streaming
+
+A single `dotnet build` produces an assembly for each supported server version.
+Install the one matching your Jellyfin:
+
+| Your Jellyfin | Install from | Built against |
+|---------------|--------------|---------------|
+| 10.11.x       | `bin/Release/net9.0/`  | Jellyfin 10.11.4 |
+| 12.x          | `bin/Release/net10.0/` | Jellyfin 12.0.0  |
+
+The two builds share identical source — only the referenced Jellyfin assemblies
+and target framework differ. A net10.0 assembly will **not** load on Jellyfin
+10.11.x, so pick the right one.
 
 ## Installation
 
@@ -31,7 +42,8 @@ Download or build these files:
 To build from source:
 ```bash
 dotnet build -c Release
-# Output: bin/Release/net10.0/
+# Output: bin/Release/net9.0/  (Jellyfin 10.11.x)
+#         bin/Release/net10.0/ (Jellyfin 12.x)
 ```
 
 ### Step 2: Copy files to the plugin directory
@@ -188,10 +200,14 @@ Optional utility scripts are available in the `scripts/` folder. See [scripts/RE
 ## Building from Source
 
 ```bash
-# Prerequisites: .NET 10.0 SDK
+# Prerequisites: .NET 9.0 and .NET 10.0 SDKs (the project multi-targets)
 dotnet build -c Release
 
-# Output: bin/Release/net10.0/
+# Output: bin/Release/net9.0/  (Jellyfin 10.11.x)
+#         bin/Release/net10.0/ (Jellyfin 12.x)
+
+# To build only one:
+dotnet build -c Release -f net9.0
 ```
 
 ## Technical Details
@@ -244,6 +260,11 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ## Changelog
+
+### 3.1.0
+
+- Supports **both Jellyfin 10.11.x and 12.x** from one source tree via multi-targeting: the `net9.0` build references Jellyfin 10.11.4, the `net10.0` build references 12.0.0
+- No `#if` conditionals were needed — every API the plugin uses is unchanged between the two server versions
 
 ### 3.0.0
 

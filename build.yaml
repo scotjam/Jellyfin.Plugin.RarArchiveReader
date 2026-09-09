@@ -1,7 +1,10 @@
 ---
 name: "RAR Archive Reader"
 guid: "a8f38b91-6c7d-4e9a-9f2b-1234567890ab"
-version: "3.0.0.0"
+version: "3.1.0.0"
+# This manifest describes the Jellyfin 12.x artifact (net10.0 build).
+# The same source also builds a net9.0 assembly against Jellyfin 10.11.x -
+# see bin/Release/net9.0/ and the README for which one to install.
 targetAbi: "12.0.0.0"
 framework: "net10.0"
 owner: "community"
@@ -19,6 +22,11 @@ artifacts:
   - "Jellyfin.Plugin.RarArchiveReader.dll"
   - "SharpCompress.dll"
 changelog: >
+  ## 3.1.0
+  - Build for both Jellyfin 10.11.x and 12.x from one source tree: the net9.0
+    assembly targets 10.11.x, the net10.0 assembly targets 12.x. Install the
+    one matching your server; no source differences between them.
+
   ## 3.0.0
   - Target Jellyfin 12.0 and net10.0. Requires Jellyfin 12.0 or newer; use the
     v2.2.1-jellyfin10.11 tag for Jellyfin 10.11.x servers.

@@ -1,9 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <AssemblyVersion>3.0.0.0</AssemblyVersion>
-    <FileVersion>3.0.0.0</FileVersion>
+    <!-- net9.0 builds against Jellyfin 10.11.x, net10.0 against Jellyfin 12.x.
+         Both come from the same source; ship the DLL matching your server. -->
+    <TargetFrameworks>net9.0;net10.0</TargetFrameworks>
+    <AssemblyVersion>3.1.0.0</AssemblyVersion>
+    <FileVersion>3.1.0.0</FileVersion>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <Nullable>enable</Nullable>
@@ -11,9 +13,17 @@
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
   </PropertyGroup>
 
-  <ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net9.0'">
+    <PackageReference Include="Jellyfin.Controller" Version="10.11.4" />
+    <PackageReference Include="Jellyfin.Model" Version="10.11.4" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
     <PackageReference Include="Jellyfin.Controller" Version="12.0.0" />
     <PackageReference Include="Jellyfin.Model" Version="12.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Pinned: StoredRarMap reflects into SharpCompress internals (parts,
          FileHeader, SourceStream.Files) for the seekable stored-entry path.
          Verify direct stored access still works before bumping this. -->
