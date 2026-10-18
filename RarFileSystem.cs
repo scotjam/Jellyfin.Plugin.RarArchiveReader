@@ -105,7 +105,7 @@ namespace Jellyfin.Plugin.RarArchiveReader
         /// </summary>
         /// <param name="archivePath">Path to any volume of the archive (the first volume is passed in practice).</param>
         /// <returns>A tuple uniquely identifying the current on-disk state of the volume set.</returns>
-        private static (int Count, long TotalLength, long MaxTicks) ComputeVolumeStamp(string archivePath)
+        internal static (int Count, long TotalLength, long MaxTicks) ComputeVolumeStamp(string archivePath)
         {
             var dir = Path.GetDirectoryName(archivePath);
             if (string.IsNullOrEmpty(dir))
@@ -168,7 +168,7 @@ namespace Jellyfin.Plugin.RarArchiveReader
         }
 
         /// <summary>
-        /// Recursively finds RAR files under a root path, skipping UNRAR mount point
+        /// Recursively finds RAR archives (first volumes only) under a root path, skipping UNRAR mount point
         /// directories to avoid traversing slow FUSE mounts.
         /// </summary>
         /// <param name="rootPath">The root directory to scan.</param>
@@ -191,7 +191,8 @@ namespace Jellyfin.Plugin.RarArchiveReader
                 {
                     foreach (var file in Directory.EnumerateFiles(dir, "*.rar"))
                     {
-                        if (IsRarArchive(file))
+                        // Later volumes (.part2.rar, .part089.rar) open as incomplete archives; only list the set once.
+                        if (StrmFileHelper.IsFirstVolume(file))
                         {
                             results.Add(file);
                         }

@@ -48,8 +48,6 @@ namespace Jellyfin.Plugin.RarArchiveReader
 
                 _logger.LogInformation("Starting RAR archive post-scan task");
 
-                var fileSystem = Plugin.GetFileSystem();
-
                 // Get all library paths from Jellyfin configuration
                 var libraryPaths = GetLibraryPaths();
 
@@ -116,30 +114,18 @@ namespace Jellyfin.Plugin.RarArchiveReader
                     {
                         _logger.LogDebug("Processing RAR archive: {Archive}", rarFile);
 
-                        // Check if this archive contains media files
-                        var entries = fileSystem.GetArchiveEntries(rarFile);
-                        var mediaEntries = entries.Where(e => StrmFileHelper.IsMediaFile(e.Key, config)).ToList();
+                        // Create .strm files for direct streaming without extraction
+                        var result = StrmFileHelper.SyncArchive(_logger, rarFile, config);
 
-                        if (mediaEntries.Count == 0)
+                        foreach (var key in result.EntryKeys)
                         {
-                            _logger.LogDebug("Archive {Archive} contains no media files, skipping", rarFile);
-                            processedCount++;
-                            continue;
-                        }
-
-                        foreach (var mediaEntry in mediaEntries)
-                        {
-                            var name = Path.GetFileName(mediaEntry.Key);
+                            var name = Path.GetFileName(key);
                             if (!string.IsNullOrEmpty(name))
                             {
                                 rarMediaFileNames.Add(name);
                             }
                         }
 
-                        _logger.LogDebug("Archive {Archive} contains {Count} media files", rarFile, mediaEntries.Count);
-
-                        // Create .strm files for direct streaming without extraction
-                        var result = StrmFileHelper.CreateStrmFiles(_logger, rarFile, entries, config);
                         mountedCount += result.Total;
                         changedStrmFiles.AddRange(result.Changed);
                     }

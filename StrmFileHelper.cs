@@ -27,6 +27,9 @@ namespace Jellyfin.Plugin.RarArchiveReader
 
         /// <summary>Gets the paths that changed on disk (created or updated).</summary>
         public IEnumerable<string> Changed => Created.Concat(Updated);
+
+        /// <summary>Gets the archive entry keys of the media files the STRM files point at.</summary>
+        public List<string> EntryKeys { get; } = new();
     }
 
     /// <summary>
@@ -35,6 +38,97 @@ namespace Jellyfin.Plugin.RarArchiveReader
     public static class StrmFileHelper
     {
         private static readonly Regex PartVolumeRegex = new(@"\.part(\d+)\.rar$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        // Comment line written after the URL: "# rar-volumes {count}:{bytes}:{ticks} {mediaCount}".
+        // Jellyfin skips '#' lines when reading a STRM, so it only matters to us.
+        private const string StampPrefix = "# rar-volumes ";
+
+        /// <summary>
+        /// Brings the STRM files for one archive up to date. Opening a RAR reads the headers of every
+        /// volume, which is the slow part of a scan, so the archive is only opened when its volume set
+        /// differs from the stamp recorded in its STRM files (or they are missing).
+        /// </summary>
+        /// <param name="logger">Logger.</param>
+        /// <param name="rarFile">Path to the first RAR volume.</param>
+        /// <param name="config">Plugin configuration.</param>
+        /// <returns>What was created/updated/unchanged.</returns>
+        public static StrmResult SyncArchive(ILogger logger, string rarFile, Configuration.PluginConfiguration config)
+        {
+            // Stamp before reading, so a set that changes mid-read gets read again next time.
+            var stamp = FormatStamp(RarFileSystem.ComputeVolumeStamp(rarFile));
+
+            var upToDate = FindStampedStrmFiles(rarFile, stamp, config);
+            if (upToDate != null)
+            {
+                logger.LogDebug("RAR volumes unchanged since STRM files were written, skipping: {Archive}", rarFile);
+                return upToDate;
+            }
+
+            var entries = Plugin.GetFileSystem().GetArchiveEntries(rarFile);
+            return CreateStrmFiles(logger, rarFile, entries, config, stamp);
+        }
+
+        /// <summary>
+        /// Formats a volume stamp for the STRM comment line.
+        /// </summary>
+        /// <param name="stamp">Stamp from <see cref="RarFileSystem.ComputeVolumeStamp"/>.</param>
+        /// <returns>The stamp text, or null when the volumes could not be listed.</returns>
+        public static string? FormatStamp((int Count, long TotalLength, long MaxTicks) stamp)
+        {
+            return stamp.Count == 0 ? null : $"{stamp.Count}:{stamp.TotalLength}:{stamp.MaxTicks}";
+        }
+
+        /// <summary>
+        /// Returns the archive's existing STRM files when every one of them was written for the given
+        /// volume stamp and the current stream URL, and none are missing. Returns null when the archive
+        /// has to be opened.
+        /// </summary>
+        /// <param name="rarFile">Path to the first RAR volume.</param>
+        /// <param name="stamp">Current volume stamp text.</param>
+        /// <param name="config">Plugin configuration.</param>
+        /// <returns>The up-to-date STRM files as an all-unchanged result, or null.</returns>
+        public static StrmResult? FindStampedStrmFiles(string rarFile, string? stamp, Configuration.PluginConfiguration config)
+        {
+            var archiveDir = Path.GetDirectoryName(rarFile);
+            if (stamp == null || string.IsNullOrEmpty(archiveDir))
+            {
+                return null;
+            }
+
+            var urlPrefix = GetStreamUrl(rarFile, string.Empty, config);
+            var result = new StrmResult();
+            var expected = -1;
+
+            foreach (var strmPath in Directory.EnumerateFiles(archiveDir, "*.strm"))
+            {
+                var (url, stampLine) = ReadStrm(strmPath);
+                if (url == null || !url.StartsWith(urlPrefix, StringComparison.Ordinal))
+                {
+                    continue; // Belongs to another archive, or the base URL changed.
+                }
+
+                var stampPrefix = StampPrefix + stamp + " ";
+                if (stampLine == null
+                    || !stampLine.StartsWith(stampPrefix, StringComparison.Ordinal)
+                    || !int.TryParse(stampLine.AsSpan(stampPrefix.Length), out expected))
+                {
+                    return null;
+                }
+
+                result.Unchanged.Add(strmPath);
+                result.EntryKeys.Add(HttpUtility.UrlDecode(url.Substring(urlPrefix.Length)));
+            }
+
+            return expected > 0 && result.Unchanged.Count == expected ? result : null;
+        }
+
+        private static (string? Url, string? StampLine) ReadStrm(string strmPath)
+        {
+            var lines = File.ReadAllLines(strmPath).Select(l => l.Trim()).ToList();
+            return (
+                lines.FirstOrDefault(l => l.Length > 0 && !l.StartsWith('#')),
+                lines.FirstOrDefault(l => l.StartsWith(StampPrefix, StringComparison.Ordinal)));
+        }
 
         /// <summary>
         /// Returns true if the given path is the first volume of a RAR set (or a single-volume archive).
@@ -129,8 +223,9 @@ namespace Jellyfin.Plugin.RarArchiveReader
         /// <param name="rarFile">Path to the first RAR volume.</param>
         /// <param name="entries">Archive entries.</param>
         /// <param name="config">Plugin configuration.</param>
+        /// <param name="stamp">Volume stamp taken before the entries were read, or null to write no stamp.</param>
         /// <returns>What was created/updated/unchanged.</returns>
-        public static StrmResult CreateStrmFiles(ILogger logger, string rarFile, IEnumerable<ArchiveEntryInfo> entries, Configuration.PluginConfiguration config)
+        public static StrmResult CreateStrmFiles(ILogger logger, string rarFile, IEnumerable<ArchiveEntryInfo> entries, Configuration.PluginConfiguration config, string? stamp)
         {
             var result = new StrmResult();
             var archiveDir = Path.GetDirectoryName(rarFile);
@@ -140,13 +235,11 @@ namespace Jellyfin.Plugin.RarArchiveReader
                 return result;
             }
 
-            foreach (var entry in entries)
-            {
-                if (!IsMediaFile(entry.Key, config))
-                {
-                    continue;
-                }
+            var mediaEntries = entries.Where(e => IsMediaFile(e.Key, config)).ToList();
+            var stampLine = stamp == null ? string.Empty : $"{StampPrefix}{stamp} {mediaEntries.Count}\n";
 
+            foreach (var entry in mediaEntries)
+            {
                 try
                 {
                     var mediaFileName = Path.GetFileName(entry.Key);
@@ -155,24 +248,31 @@ namespace Jellyfin.Plugin.RarArchiveReader
                     // Put the .strm next to the RAR so Jellyfin uses the release folder name.
                     var strmPath = Path.Combine(archiveDir, strmFileName);
                     var streamUrl = GetStreamUrl(rarFile, entry.Key, config);
+                    var content = streamUrl + "\n" + stampLine;
+                    result.EntryKeys.Add(entry.Key);
 
                     if (File.Exists(strmPath))
                     {
-                        var existingContent = File.ReadAllText(strmPath).Trim();
-                        if (existingContent == streamUrl)
+                        if (ReadStrm(strmPath).Url == streamUrl)
                         {
+                            // Same target: a stale stamp is ours alone, so refresh it without telling Jellyfin.
+                            if (File.ReadAllText(strmPath) != content)
+                            {
+                                File.WriteAllText(strmPath, content);
+                            }
+
                             logger.LogDebug("STRM file already up to date: {Path}", strmPath);
                             result.Unchanged.Add(strmPath);
                             continue;
                         }
 
                         logger.LogInformation("Updating STRM file with new RAR path: {Path}", strmPath);
-                        File.WriteAllText(strmPath, streamUrl);
+                        File.WriteAllText(strmPath, content);
                         result.Updated.Add(strmPath);
                         continue;
                     }
 
-                    File.WriteAllText(strmPath, streamUrl);
+                    File.WriteAllText(strmPath, content);
                     logger.LogInformation("Created STRM file: {Path} -> {Url}", strmPath, streamUrl);
                     result.Created.Add(strmPath);
                 }

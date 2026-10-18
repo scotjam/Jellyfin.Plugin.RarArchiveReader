@@ -51,16 +51,27 @@ namespace Jellyfin.Plugin.RarArchiveReader
                     return false;
                 }
 
-                // Check for multi-part RAR archive and get all parts
-                var archiveParts = GetMultiPartArchivePaths(_archivePath);
+                // SharpCompress finds the remaining volumes from the first one
+                var archive = RarArchive.Open(_archivePath);
 
-                if (archiveParts.Count > 1)
+                // Only publish the archive once every volume is readable, so a failed Open() can be retried
+                int volumeCount;
+                try
                 {
-                    _logger.LogInformation("Opening multi-part RAR archive with {Count} parts: {Path}", archiveParts.Count, _archivePath);
+                    volumeCount = archive.Volumes.Count();
+                }
+                catch
+                {
+                    archive.Dispose();
+                    throw;
                 }
 
-                // Open the archive (SharpCompress automatically handles multi-part archives)
-                _archive = RarArchive.Open(_archivePath);
+                _archive = archive;
+                if (volumeCount > 1)
+                {
+                    _logger.LogInformation("Opened multi-part RAR archive with {Count} volumes: {Path}", volumeCount, _archivePath);
+                }
+
                 return true;
             }
             catch (Exception ex)
@@ -68,83 +79,6 @@ namespace Jellyfin.Plugin.RarArchiveReader
                 _logger.LogError(ex, "Failed to open RAR archive: {Path}", _archivePath);
                 return false;
             }
-        }
-
-        /// <summary>
-        /// Gets all parts of a multi-part RAR archive.
-        /// </summary>
-        /// <param name="firstPartPath">Path to the first part (or any part) of the archive.</param>
-        /// <returns>List of all archive part paths.</returns>
-        private List<string> GetMultiPartArchivePaths(string firstPartPath)
-        {
-            var parts = new List<string>();
-            var directory = Path.GetDirectoryName(firstPartPath);
-            var fileName = Path.GetFileNameWithoutExtension(firstPartPath);
-            var extension = Path.GetExtension(firstPartPath).ToLowerInvariant();
-
-            if (string.IsNullOrEmpty(directory))
-            {
-                parts.Add(firstPartPath);
-                return parts;
-            }
-
-            // Handle different multi-part naming conventions:
-            // 1. .rar, .r00, .r01, .r02, etc.
-            // 2. .part1.rar, .part2.rar, .part3.rar, etc.
-            // 3. .part01.rar, .part02.rar, .part03.rar, etc.
-
-            if (extension == ".rar")
-            {
-                // Check for .r00, .r01 style
-                parts.Add(firstPartPath);
-                for (int i = 0; i < 1000; i++)
-                {
-                    var partPath = Path.Combine(directory, $"{fileName}.r{i:D2}");
-                    if (File.Exists(partPath))
-                    {
-                        parts.Add(partPath);
-                    }
-                    else
-                    {
-                        break;
-                    }
-                }
-
-                // Check for .part1.rar style
-                if (fileName.Contains(".part"))
-                {
-                    var baseName = fileName.Substring(0, fileName.LastIndexOf(".part", StringComparison.OrdinalIgnoreCase));
-                    for (int i = 1; i < 1000; i++)
-                    {
-                        var partPath = Path.Combine(directory, $"{baseName}.part{i}.rar");
-                        if (File.Exists(partPath))
-                        {
-                            if (!parts.Contains(partPath))
-                            {
-                                parts.Add(partPath);
-                            }
-                        }
-                        else
-                        {
-                            // Try zero-padded version
-                            partPath = Path.Combine(directory, $"{baseName}.part{i:D2}.rar");
-                            if (File.Exists(partPath))
-                            {
-                                if (!parts.Contains(partPath))
-                                {
-                                    parts.Add(partPath);
-                                }
-                            }
-                            else
-                            {
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
-            return parts.Count > 0 ? parts : new List<string> { firstPartPath };
         }
 
         /// <summary>
