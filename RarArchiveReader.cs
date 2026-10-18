@@ -18,7 +18,8 @@ namespace Jellyfin.Plugin.RarArchiveReader
     {
         private readonly ILogger _logger;
         private readonly string _archivePath;
-        private RarArchive? _archive;
+        private readonly object _openLock = new();
+        private volatile RarArchive? _archive;
         private bool _disposed;
 
         /// <summary>
@@ -38,6 +39,16 @@ namespace Jellyfin.Plugin.RarArchiveReader
         /// <returns>True if successful, false otherwise.</returns>
         public bool Open()
         {
+            // ponytail: one reader is shared by concurrent requests (e.g. ffprobe on every video of a
+            // multi-video archive at once); open under a lock and only publish a fully loaded archive.
+            lock (_openLock)
+            {
+                return OpenCore();
+            }
+        }
+
+        private bool OpenCore()
+        {
             try
             {
                 if (_archive != null)
@@ -54,11 +65,13 @@ namespace Jellyfin.Plugin.RarArchiveReader
                 // SharpCompress finds the remaining volumes from the first one
                 var archive = RarFileSystem.OpenArchive(_archivePath);
 
-                // Only publish the archive once every volume is readable, so a failed Open() can be retried
+                // Only publish the archive once every volume and entry has been read, so a failed Open() can be
+                // retried and later readers never race SharpCompress's lazy loading.
                 int volumeCount;
                 try
                 {
                     volumeCount = archive.Volumes.Count();
+                    _ = archive.Entries.Count();
                 }
                 catch
                 {
