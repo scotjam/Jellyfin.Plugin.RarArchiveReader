@@ -152,6 +152,41 @@ namespace Jellyfin.Plugin.RarArchiveReader
         }
 
         /// <summary>
+        /// Opens a RAR set from its first volume. SharpCompress picks the volume naming scheme from the
+        /// file name alone, so an old-style set (<c>.rar</c>, <c>.r00</c>, <c>.r01</c>...) whose base name
+        /// ends in <c>.part01</c> would be read as new-style and come out incomplete. Such sets get their
+        /// volumes listed explicitly.
+        /// </summary>
+        /// <param name="firstVolume">Path to the first volume.</param>
+        /// <returns>The opened archive.</returns>
+        public static SharpCompress.Archives.Rar.RarArchive OpenArchive(string firstVolume)
+        {
+            return StrmFileHelper.HasOldStyleVolumes(firstVolume)
+                ? SharpCompress.Archives.Rar.RarArchive.Open(GetOldStyleVolumes(firstVolume).ToList())
+                : SharpCompress.Archives.Rar.RarArchive.Open(firstVolume);
+        }
+
+        /// <summary>
+        /// Lists an old-style volume set: the <c>.rar</c>, then <c>.r00</c>-<c>.r99</c>, <c>.s00</c>... until one is missing.
+        /// </summary>
+        /// <param name="firstVolume">Path to the <c>.rar</c> volume.</param>
+        /// <returns>The volumes in order.</returns>
+        internal static IEnumerable<FileInfo> GetOldStyleVolumes(string firstVolume)
+        {
+            yield return new FileInfo(firstVolume);
+            for (var i = 0; ; i++)
+            {
+                var next = new FileInfo(Path.ChangeExtension(firstVolume, $".{(char)('r' + (i / 100))}{i % 100:D2}"));
+                if (!next.Exists)
+                {
+                    yield break;
+                }
+
+                yield return next;
+            }
+        }
+
+        /// <summary>
         /// Checks if a path points to a RAR archive.
         /// </summary>
         /// <param name="path">The path to check.</param>

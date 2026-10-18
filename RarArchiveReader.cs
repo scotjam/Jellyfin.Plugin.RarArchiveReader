@@ -52,7 +52,7 @@ namespace Jellyfin.Plugin.RarArchiveReader
                 }
 
                 // SharpCompress finds the remaining volumes from the first one
-                var archive = RarArchive.Open(_archivePath);
+                var archive = RarFileSystem.OpenArchive(_archivePath);
 
                 // Only publish the archive once every volume is readable, so a failed Open() can be retried
                 int volumeCount;

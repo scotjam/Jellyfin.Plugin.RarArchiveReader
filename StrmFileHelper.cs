@@ -150,7 +150,20 @@ namespace Jellyfin.Plugin.RarArchiveReader
                 return true;
             }
 
-            return int.TryParse(match.Groups[1].Value, out var n) && n == 1;
+            // An old-style set (.rar, .r00...) can have a base name ending in ".partN"; its .rar is the first volume.
+            return (int.TryParse(match.Groups[1].Value, out var n) && n == 1) || HasOldStyleVolumes(path);
+        }
+
+        /// <summary>
+        /// Returns true if the archive continues in old-style volumes (<c>.r00</c>, <c>.r01</c>...),
+        /// whatever its own name looks like.
+        /// </summary>
+        /// <param name="path">Path to a <c>.rar</c> volume.</param>
+        /// <returns>True when a sibling <c>.r00</c> exists.</returns>
+        public static bool HasOldStyleVolumes(string path)
+        {
+            // ponytail: exact-case ".r00" lookup; uppercase ".R00" sets on case-sensitive file systems still go by the name.
+            return File.Exists(Path.ChangeExtension(path, ".r00"));
         }
 
         /// <summary>

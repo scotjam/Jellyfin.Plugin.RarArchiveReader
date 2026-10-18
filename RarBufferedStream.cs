@@ -160,7 +160,7 @@ namespace Jellyfin.Plugin.RarArchiveReader
 
         private void OpenEntryStream()
         {
-            _archive = RarArchive.Open(_archivePath);
+            _archive = RarFileSystem.OpenArchive(_archivePath);
             foreach (var entry in _archive.Entries)
             {
                 if (entry.Key == _entryKey && !entry.IsDirectory)
