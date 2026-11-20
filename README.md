@@ -33,9 +33,9 @@ and target framework differ. A net10.0 assembly will **not** load on Jellyfin
 
 ## Installation
 
-### Step 1: Download the plugin files
+### Step 1: Build the plugin files
 
-Download or build these files:
+Build these files (pick the folder matching your server, see above):
 - `Jellyfin.Plugin.RarArchiveReader.dll`
 - `SharpCompress.dll`
 
@@ -68,7 +68,7 @@ chown -R 1000:100 /path/to/jellyfin/config/data/plugins/RarArchiveReader
 
 Or use the installer script:
 ```bash
-bash install.sh /path/to/jellyfin/config
+bash install.sh /path/to/jellyfin/config 12    # or 10.11
 ```
 
 ### Step 3: Restart Jellyfin

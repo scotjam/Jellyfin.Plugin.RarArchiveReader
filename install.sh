@@ -2,9 +2,13 @@
 # Jellyfin RAR Archive Reader Plugin - Installer
 # Run this script on your Docker host to install the plugin
 #
-# Usage: ./install.sh /path/to/jellyfin/config
+# Usage: ./install.sh /path/to/jellyfin/config [10.11|12]
 #
-# Example: ./install.sh /srv/jellyfin/config
+# The second argument picks the build for your Jellyfin version: 10.11 uses
+# bin/Release/net9.0, 12 uses bin/Release/net10.0. It can be left out when
+# only one of the two has been built.
+#
+# Example: ./install.sh /srv/jellyfin/config 12
 
 set -e
 
@@ -24,7 +28,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Check for config path argument
 if [ -z "$1" ]; then
-    echo -e "${YELLOW}Usage: $0 /path/to/jellyfin/config${NC}"
+    echo -e "${YELLOW}Usage: $0 /path/to/jellyfin/config [10.11|12]${NC}"
     echo ""
     echo "Common locations:"
     echo "  - /srv/jellyfin/config"
@@ -66,19 +70,40 @@ echo "  Created: $PLUGIN_DIR"
 # Step 2: Copy plugin files
 echo -e "${YELLOW}[2/3] Installing plugin...${NC}"
 
-if [ -f "$SCRIPT_DIR/bin/Release/net8.0/Jellyfin.Plugin.RarArchiveReader.dll" ]; then
-    cp "$SCRIPT_DIR/bin/Release/net8.0/Jellyfin.Plugin.RarArchiveReader.dll" "$PLUGIN_DIR/"
-    cp "$SCRIPT_DIR/bin/Release/net8.0/SharpCompress.dll" "$PLUGIN_DIR/"
-    echo "  Copied plugin DLLs from bin/Release/net8.0/"
-elif [ -f "$SCRIPT_DIR/Jellyfin.Plugin.RarArchiveReader.dll" ]; then
-    cp "$SCRIPT_DIR/Jellyfin.Plugin.RarArchiveReader.dll" "$PLUGIN_DIR/"
-    cp "$SCRIPT_DIR/SharpCompress.dll" "$PLUGIN_DIR/"
-    echo "  Copied plugin DLLs from script directory"
-else
+case "$2" in
+    10.11*) TFM=net9.0 ;;
+    12*)    TFM=net10.0 ;;
+    "")
+        BUILT=""
+        for t in net9.0 net10.0; do
+            [ -f "$SCRIPT_DIR/bin/Release/$t/Jellyfin.Plugin.RarArchiveReader.dll" ] && BUILT="$BUILT $t"
+        done
+        set -- "$1" $BUILT
+        if [ $# -eq 2 ]; then
+            TFM="$2"
+        elif [ $# -gt 2 ]; then
+            echo -e "${RED}Error: both builds exist. Say which Jellyfin version you run:${NC}"
+            echo "  $0 $JELLYFIN_CONFIG 10.11   (Jellyfin 10.11.x)"
+            echo "  $0 $JELLYFIN_CONFIG 12      (Jellyfin 12.x)"
+            exit 1
+        fi
+        ;;
+    *)
+        echo -e "${RED}Error: unknown Jellyfin version '$2' (use 10.11 or 12)${NC}"
+        exit 1
+        ;;
+esac
+
+BUILD_DIR="$SCRIPT_DIR/bin/Release/$TFM"
+if [ -z "$TFM" ] || [ ! -f "$BUILD_DIR/Jellyfin.Plugin.RarArchiveReader.dll" ]; then
     echo -e "${RED}Error: Plugin DLLs not found. Please build the plugin first:${NC}"
     echo "  dotnet build -c Release"
     exit 1
 fi
+
+cp "$BUILD_DIR/Jellyfin.Plugin.RarArchiveReader.dll" "$PLUGIN_DIR/"
+cp "$BUILD_DIR/SharpCompress.dll" "$PLUGIN_DIR/"
+echo "  Copied plugin DLLs from bin/Release/$TFM/"
 
 # Step 3: Set permissions
 echo -e "${YELLOW}[3/3] Setting permissions...${NC}"
