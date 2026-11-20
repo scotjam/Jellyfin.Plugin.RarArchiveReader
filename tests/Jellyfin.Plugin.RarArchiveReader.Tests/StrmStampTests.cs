@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Jellyfin.Plugin.RarArchiveReader.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -89,6 +90,31 @@ namespace Jellyfin.Plugin.RarArchiveReader.Tests
         public void UnlistableVolumes_Reopen()
         {
             Assert.Null(StrmFileHelper.FormatStamp((0, 0, 0)));
+            Assert.Null(StrmFileHelper.WithMediaTypes(null, _config));
+        }
+
+        [Fact]
+        public void ChangedMediaTypes_Reopen()
+        {
+            var before = StrmFileHelper.WithMediaTypes("2:100:5", _config);
+            Write(before!);
+
+            _config.SupportedVideoExtensions += ",.ts";
+            var after = StrmFileHelper.WithMediaTypes("2:100:5", _config);
+
+            Assert.NotEqual(before, after);
+            Assert.Null(StrmFileHelper.FindStampedStrmFiles(Rar, after, _config));
+            Assert.NotNull(StrmFileHelper.FindStampedStrmFiles(Rar, before, _config));
+        }
+
+        [Fact]
+        public void ReorderedMediaTypes_KeepStamp()
+        {
+            var before = StrmFileHelper.WithMediaTypes("2:100:5", _config);
+
+            _config.SupportedVideoExtensions = string.Join(",", Enumerable.Reverse(_config.SupportedVideoExtensions.ToUpperInvariant().Split(',')));
+
+            Assert.Equal(before, StrmFileHelper.WithMediaTypes("2:100:5", _config));
         }
     }
 }

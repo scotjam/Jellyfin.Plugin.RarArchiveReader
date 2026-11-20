@@ -4,8 +4,8 @@
     <!-- net9.0 builds against Jellyfin 10.11.x, net10.0 against Jellyfin 12.x.
          Both come from the same source; ship the DLL matching your server. -->
     <TargetFrameworks>net9.0;net10.0</TargetFrameworks>
-    <AssemblyVersion>3.1.0.0</AssemblyVersion>
-    <FileVersion>3.1.0.0</FileVersion>
+    <AssemblyVersion>3.2.0.0</AssemblyVersion>
+    <FileVersion>3.2.0.0</FileVersion>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <Nullable>enable</Nullable>

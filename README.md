@@ -294,6 +294,14 @@ SOFTWARE.
 
 ## Changelog
 
+### 3.2.0
+
+- Library scans skip archives whose volumes haven't changed: each `.strm` file now carries a `# rar-volumes` line recording the volume set, the configured media types and the media count, and the archive is only reopened when that differs (contributed in #2)
+- Changing the supported media extensions re-reads every archive on the next scan
+- Shared archive readers load every volume and entry before use, so simultaneous ffprobe requests on a multi-video archive no longer see an empty entry list (#2)
+- Old-style volume sets (`.rar`, `.r00`...) whose name ends in `.partN`, and three-digit `.part001.rar` numbering, are read correctly (#2)
+- Later volumes are no longer opened as separate, incomplete archives (#2)
+
 ### 3.1.0
 
 - Supports **both Jellyfin 10.11.x and 12.x** from one source tree via multi-targeting: the `net9.0` build references Jellyfin 10.11.4, the `net10.0` build references 12.0.0

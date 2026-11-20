@@ -39,7 +39,7 @@ namespace Jellyfin.Plugin.RarArchiveReader
     {
         private static readonly Regex PartVolumeRegex = new(@"\.part(\d+)\.rar$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-        // Comment line written after the URL: "# rar-volumes {count}:{bytes}:{ticks} {mediaCount}".
+        // Comment line written after the URL: "# rar-volumes {count}:{bytes}:{ticks}:{mediaTypes} {mediaCount}".
         // Jellyfin skips '#' lines when reading a STRM, so it only matters to us.
         private const string StampPrefix = "# rar-volumes ";
 
@@ -55,7 +55,8 @@ namespace Jellyfin.Plugin.RarArchiveReader
         public static StrmResult SyncArchive(ILogger logger, string rarFile, Configuration.PluginConfiguration config)
         {
             // Stamp before reading, so a set that changes mid-read gets read again next time.
-            var stamp = FormatStamp(RarFileSystem.ComputeVolumeStamp(rarFile));
+            // The media types are part of the stamp, so changing them in the settings re-reads every archive.
+            var stamp = WithMediaTypes(FormatStamp(RarFileSystem.ComputeVolumeStamp(rarFile)), config);
 
             var upToDate = FindStampedStrmFiles(rarFile, stamp, config);
             if (upToDate != null)
@@ -76,6 +77,28 @@ namespace Jellyfin.Plugin.RarArchiveReader
         public static string? FormatStamp((int Count, long TotalLength, long MaxTicks) stamp)
         {
             return stamp.Count == 0 ? null : $"{stamp.Count}:{stamp.TotalLength}:{stamp.MaxTicks}";
+        }
+
+        /// <summary>
+        /// Appends a short fingerprint of the configured media extensions to a volume stamp, so STRM files
+        /// written under a different media-type setting count as stale. Order, case and duplicates don't matter.
+        /// </summary>
+        /// <param name="stamp">Stamp text from <see cref="FormatStamp"/>, or null.</param>
+        /// <param name="config">Plugin configuration.</param>
+        /// <returns>The combined stamp, or null when <paramref name="stamp"/> is null.</returns>
+        public static string? WithMediaTypes(string? stamp, Configuration.PluginConfiguration config)
+        {
+            if (stamp == null)
+            {
+                return null;
+            }
+
+            var types = string.Join(",", GetMediaExtensions(config)
+                .Select(e => e.ToLowerInvariant())
+                .Distinct()
+                .OrderBy(e => e, StringComparer.Ordinal));
+            var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(types));
+            return $"{stamp}:{Convert.ToHexString(hash, 0, 4).ToLowerInvariant()}";
         }
 
         /// <summary>

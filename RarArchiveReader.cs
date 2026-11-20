@@ -18,8 +18,7 @@ namespace Jellyfin.Plugin.RarArchiveReader
     {
         private readonly ILogger _logger;
         private readonly string _archivePath;
-        private readonly object _openLock = new();
-        private volatile RarArchive? _archive;
+        private RarArchive? _archive;
         private bool _disposed;
 
         /// <summary>
@@ -39,16 +38,10 @@ namespace Jellyfin.Plugin.RarArchiveReader
         /// <returns>True if successful, false otherwise.</returns>
         public bool Open()
         {
-            // ponytail: one reader is shared by concurrent requests (e.g. ffprobe on every video of a
-            // multi-video archive at once); open under a lock and only publish a fully loaded archive.
-            lock (_openLock)
-            {
-                return OpenCore();
-            }
-        }
-
-        private bool OpenCore()
-        {
+            // No lock needed here: RarFileSystem.GetArchiveReader is the only place a reader is created, it
+            // calls Open() inside its cache lock, and it shares the reader only after Open() succeeds. Once
+            // _archive is set it is never cleared, so the lazy Open() calls below always return early.
+            // What concurrent requests need is the eager load further down (see ConcurrentOpenTests).
             try
             {
                 if (_archive != null)
