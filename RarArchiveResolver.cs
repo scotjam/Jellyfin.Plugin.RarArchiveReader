@@ -106,16 +106,15 @@ namespace Jellyfin.Plugin.RarArchiveReader
                 return;
             }
 
-            var fileSystem = Plugin.GetFileSystem();
             var existing = new HashSet<string>(children.Select(c => c.FullName), StringComparer.OrdinalIgnoreCase);
             var toInject = new List<FileSystemMetadata>();
 
             foreach (var rarFile in rarFiles)
             {
-                List<ArchiveEntryInfo> entries;
+                StrmResult result;
                 try
                 {
-                    entries = fileSystem.GetArchiveEntries(rarFile);
+                    result = StrmFileHelper.SyncArchive(_logger, rarFile, config);
                 }
                 catch (Exception ex)
                 {
@@ -124,8 +123,6 @@ namespace Jellyfin.Plugin.RarArchiveReader
                     _logger.LogDebug(ex, "Could not read RAR archive during scan: {Archive}", rarFile);
                     continue;
                 }
-
-                var result = StrmFileHelper.CreateStrmFiles(_logger, rarFile, entries, config);
 
                 foreach (var strmPath in result.Created.Concat(result.Updated).Concat(result.Unchanged))
                 {
@@ -164,18 +161,16 @@ namespace Jellyfin.Plugin.RarArchiveReader
         /// </summary>
         private void ProcessStandaloneArchive(string rarFile, Configuration.PluginConfiguration config)
         {
-            List<ArchiveEntryInfo> entries;
+            StrmResult result;
             try
             {
-                entries = Plugin.GetFileSystem().GetArchiveEntries(rarFile);
+                result = StrmFileHelper.SyncArchive(_logger, rarFile, config);
             }
             catch (Exception ex)
             {
                 _logger.LogDebug(ex, "Could not read RAR archive during scan: {Archive}", rarFile);
                 return;
             }
-
-            var result = StrmFileHelper.CreateStrmFiles(_logger, rarFile, entries, config);
 
             foreach (var strmPath in result.Changed)
             {

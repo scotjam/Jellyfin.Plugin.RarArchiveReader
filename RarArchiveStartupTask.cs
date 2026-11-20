@@ -61,8 +61,6 @@ namespace Jellyfin.Plugin.RarArchiveReader
                 _logger.LogInformation("Starting RAR archive processing task");
                 progress.Report(0);
 
-                var fileSystem = Plugin.GetFileSystem();
-
                 progress.Report(10);
                 cancellationToken.ThrowIfCancellationRequested();
 
@@ -137,17 +135,7 @@ namespace Jellyfin.Plugin.RarArchiveReader
 
                     try
                     {
-                        var entries = fileSystem.GetArchiveEntries(rarFile);
-                        var hasMedia = entries.Any(e => StrmFileHelper.IsMediaFile(e.Key, config));
-
-                        if (!hasMedia)
-                        {
-                            _logger.LogDebug("Archive contains no media files, skipping: {Archive}", rarFile);
-                            processedCount++;
-                            continue;
-                        }
-
-                        var result = StrmFileHelper.CreateStrmFiles(_logger, rarFile, entries, config);
+                        var result = StrmFileHelper.SyncArchive(_logger, rarFile, config);
                         strmCount += result.Total;
                         changedStrmFiles.AddRange(result.Changed);
                     }
