@@ -257,11 +257,13 @@ RARLab's `rar` CLI (7-Zip and unrar can read RAR but cannot create it).
 
 ### Library Path Discovery
 
-The plugin reads Jellyfin's library configuration from:
+The plugin asks Jellyfin for the folders of every library, so custom data directories and Windows service installs work. Only if that list comes back empty does it fall back to reading `options.xml` from:
 - `/config/data/root/default/*/options.xml` (linuxserver container)
 - `/var/lib/jellyfin/root/default/*/options.xml` (native Linux install)
 - `%LOCALAPPDATA%\jellyfin\root\default\*\options.xml` (Windows portable)
 - `%PROGRAMDATA%\Jellyfin\Server\root\default\*\options.xml` (Windows standard)
+
+A library folder the Jellyfin process cannot open is skipped with a warning naming it. On Windows this is usually a mapped network drive: a Jellyfin running as a service cannot see drive letters mapped in your user session, so add the library by its UNC path (`\\server\share\Movies`) instead.
 
 ## Related
 

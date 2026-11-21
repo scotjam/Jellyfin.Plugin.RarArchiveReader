@@ -209,8 +209,9 @@ namespace Jellyfin.Plugin.RarArchiveReader
         /// <param name="rootPath">The root directory to scan.</param>
         /// <param name="deniedPaths">Collects paths where access was denied.</param>
         /// <param name="cancellationToken">Cancellation token.</param>
+        /// <param name="missingFirstVolumes">Collects <c>.r00</c> volumes that have no matching <c>.rar</c> first volume.</param>
         /// <returns>List of RAR file paths found.</returns>
-        public static List<string> FindRarFiles(string rootPath, List<string> deniedPaths, CancellationToken cancellationToken)
+        public static List<string> FindRarFiles(string rootPath, List<string> deniedPaths, CancellationToken cancellationToken, List<string>? missingFirstVolumes = null)
         {
             var results = new List<string>();
             var stack = new Stack<string>();
@@ -230,6 +231,19 @@ namespace Jellyfin.Plugin.RarArchiveReader
                         if (StrmFileHelper.IsFirstVolume(file))
                         {
                             results.Add(file);
+                        }
+                    }
+
+                    if (missingFirstVolumes != null)
+                    {
+                        // An old-style set starts at .rar; a lone .r00 is a set without its first volume.
+                        foreach (var file in Directory.EnumerateFiles(dir, "*.r00"))
+                        {
+                            if (string.Equals(Path.GetExtension(file), ".r00", StringComparison.OrdinalIgnoreCase)
+                                && !File.Exists(Path.ChangeExtension(file, ".rar")))
+                            {
+                                missingFirstVolumes.Add(file);
+                            }
                         }
                     }
                 }
@@ -276,6 +290,25 @@ namespace Jellyfin.Plugin.RarArchiveReader
             }
 
             return results;
+        }
+
+        /// <summary>
+        /// Logs a warning for volume sets that cannot be read because the <c>.rar</c> first volume is missing.
+        /// </summary>
+        /// <param name="logger">The logger instance.</param>
+        /// <param name="missingFirstVolumes">The <c>.r00</c> volumes found without a matching <c>.rar</c>.</param>
+        public static void LogMissingFirstVolumes(ILogger logger, List<string> missingFirstVolumes)
+        {
+            if (missingFirstVolumes.Count == 0)
+            {
+                return;
+            }
+
+            logger.LogWarning(
+                "Skipped {Count} RAR volume set(s) with no first volume. An old-style set starts with a .rar file, " +
+                "then .r00, .r01...; without the .rar the archive cannot be read:\n  {Paths}",
+                missingFirstVolumes.Count,
+                string.Join("\n  ", missingFirstVolumes));
         }
 
         /// <summary>

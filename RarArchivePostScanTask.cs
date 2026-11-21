@@ -5,7 +5,6 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web;
-using System.Xml.Linq;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.IO;
 using Microsoft.Extensions.Logging;
@@ -49,7 +48,7 @@ namespace Jellyfin.Plugin.RarArchiveReader
                 _logger.LogInformation("Starting RAR archive post-scan task");
 
                 // Get all library paths from Jellyfin configuration
-                var libraryPaths = GetLibraryPaths();
+                var libraryPaths = LibraryPathResolver.GetLibraryPaths(_libraryManager, _logger);
 
                 if (libraryPaths.Count == 0)
                 {
@@ -61,6 +60,7 @@ namespace Jellyfin.Plugin.RarArchiveReader
 
                 var rarFiles = new List<string>();
                 var deniedPaths = new List<string>();
+                var missingFirstVolumes = new List<string>();
                 int currentPath = 0;
 
                 foreach (var path in libraryPaths)
@@ -71,7 +71,7 @@ namespace Jellyfin.Plugin.RarArchiveReader
 
                     try
                     {
-                        var filesInPath = RarFileSystem.FindRarFiles(path, deniedPaths, cancellationToken);
+                        var filesInPath = RarFileSystem.FindRarFiles(path, deniedPaths, cancellationToken, missingFirstVolumes);
                         rarFiles.AddRange(filesInPath);
                         _logger.LogDebug("Found {Count} RAR files in {Path}", filesInPath.Count, path);
                     }
@@ -89,6 +89,7 @@ namespace Jellyfin.Plugin.RarArchiveReader
                 }
 
                 RarFileSystem.LogDeniedPaths(_logger, deniedPaths);
+                RarFileSystem.LogMissingFirstVolumes(_logger, missingFirstVolumes);
 
                 _logger.LogInformation("Found {Count} RAR archives to process", rarFiles.Count);
 
@@ -176,72 +177,6 @@ namespace Jellyfin.Plugin.RarArchiveReader
                 _logger.LogError(ex, "Error in RAR archive post-scan task");
                 throw;
             }
-        }
-
-        private List<string> GetLibraryPaths()
-        {
-            var paths = new HashSet<string>();
-
-            // Read from Jellyfin's library configuration files
-            var configBasePaths = new[]
-            {
-                "/config/data/root/default",  // linuxserver container
-                "/var/lib/jellyfin/root/default",  // native Linux install
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "jellyfin", "root", "default"),  // Windows (portable)
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Jellyfin", "Server", "root", "default"),  // Windows (standard install)
-            };
-
-            foreach (var configBasePath in configBasePaths)
-            {
-                if (!Directory.Exists(configBasePath))
-                {
-                    continue;
-                }
-
-                _logger.LogDebug("Searching for library config in: {Path}", configBasePath);
-
-                try
-                {
-                    // Find all options.xml files in library subdirectories
-                    var optionsFiles = Directory.EnumerateFiles(configBasePath, "options.xml", SearchOption.AllDirectories);
-
-                    foreach (var optionsFile in optionsFiles)
-                    {
-                        try
-                        {
-                            var xml = XDocument.Load(optionsFile);
-
-                            // Look for Path elements inside PathInfos/MediaPathInfo
-                            var pathElements = xml.Descendants("Path");
-
-                            foreach (var pathElement in pathElements)
-                            {
-                                var path = pathElement.Value?.Trim();
-                                if (!string.IsNullOrEmpty(path) && Directory.Exists(path))
-                                {
-                                    paths.Add(path);
-                                    _logger.LogDebug("Found library path: {Path}", path);
-                                }
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogDebug(ex, "Error reading options file: {File}", optionsFile);
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogDebug(ex, "Error scanning config path: {Path}", configBasePath);
-                }
-            }
-
-            if (paths.Count == 0)
-            {
-                _logger.LogWarning("No library paths found in any Jellyfin configuration location");
-            }
-
-            return paths.ToList();
         }
 
         /// <summary>
