@@ -33,9 +33,11 @@ and target framework differ. A net10.0 assembly will **not** load on Jellyfin
 
 ## Installation
 
-### Step 1: Build the plugin files
+### Step 1: Get the plugin files
 
-Build these files (pick the folder matching your server, see above):
+Download the zip matching your server from
+[Releases](https://github.com/scotjam/Jellyfin.Plugin.RarArchiveReader/releases)
+(`...-jellyfin10.11.zip` or `...-jellyfin12.zip`) and unzip it, or build these files (pick the folder matching your server, see above):
 - `Jellyfin.Plugin.RarArchiveReader.dll`
 - `SharpCompress.dll`
 
@@ -295,6 +297,12 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ## Changelog
+
+### 3.2.1
+
+- Library folders are read from Jellyfin itself, so a custom data folder or a Windows service install no longer ends every scan with "No library paths found". The fixed `options.xml` locations remain the fallback
+- A configured library folder the Jellyfin process cannot open (usually a mapped network drive under a Windows service) is logged by name instead of skipped silently
+- Old-style sets with `.r00` volumes but no `.rar` first volume are logged as unreadable instead of skipped silently
 
 ### 3.2.0
 
